@@ -505,9 +505,10 @@ function viewDividas() {
         <td class="num">${fmtBRL(Math.max(0, rest))}</td>
         <td class="num">${d.monthlyPayment ? fmtBRL(d.monthlyPayment) : "—"}</td>
         <td class="num">${d.interest != null ? d.interest + "%" : "—"}</td>
-        <td><span class="badge ${d.status === "negociando" ? "warn" : d.status === "em dia" ? "good" : "crit"}">${esc(d.status || "pendente")}</span></td>
+        <td><span class="badge ${d.status === "acordo" || d.status === "em dia" ? "good" : d.status === "negociando" ? "warn" : "crit"}">${esc(d.status || "pendente")}</span></td>
         <td style="white-space:nowrap">
-          <button class="icon-btn" title="Registrar pagamento" data-pay-debt="${d.id}">💵</button>
+          <button class="icon-btn" title="Negociar — criar acordo em parcelas nos Boletos" data-negotiate="${d.id}">🤝</button>
+          <button class="icon-btn" title="Registrar pagamento avulso" data-pay-debt="${d.id}">💵</button>
           <button class="icon-btn" data-edit-debt="${d.id}">✏️</button>
           <button class="icon-btn" data-del-debt="${d.id}">🗑️</button></td>
       </tr>`;}).join("")}</tbody></table></div>`}
@@ -715,6 +716,19 @@ async function payBill(b) {
         paidTimes, status: b.recurring ? "encerrado" : "pago"
       });
       toast(b.recurring ? "💵 Pago! Recorrência concluída — todas as parcelas quitadas. 🎉" : "💵 Conta paga e registrada!");
+    }
+    // parcela de acordo → abate a dívida vinculada
+    if (b.debtId) {
+      const d = DEBTS.find(x => x.id === b.debtId);
+      if (d) {
+        const paid = (d.paid || 0) + b.amount;
+        const rest = (d.currentValue ?? d.total) - paid;
+        await updateDoc(doc(db, "households", hid, "debts", d.id), {
+          paid, status: rest <= 0.01 ? "quitada" : d.status
+        });
+        if (rest <= 0.01) toast("🎉 Acordo quitado — dívida \"" + d.name + "\" LIQUIDADA!", 5500);
+        else toast(`💪 Abatido ${fmtBRL(b.amount)} — restam ${fmtBRL(rest)} do acordo "${d.name}".`, 4500);
+      }
     }
   } catch (e) { toast("Erro: " + e.message); }
 }
@@ -1027,7 +1041,7 @@ function modalDebt(d = null) {
     </div>
     <div class="form-row">
       <div class="field"><label>Status</label><select id="dStatus">
-        ${["em dia","atrasada","negociando","quitada"].map(s => `<option ${t.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></div>
+        ${["em dia","atrasada","negociando","acordo","quitada"].map(s => `<option ${t.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></div>
       <div class="field"><label>Dia de vencimento</label><input id="dDue" type="number" min="1" max="31" value="${t.dueDay ?? ""}"></div>
     </div>
     <div class="field"><label>Observações</label><input id="dNote" value="${esc(t.note || "")}"></div>
@@ -1050,6 +1064,70 @@ function modalDebt(d = null) {
       if (d) await updateDoc(doc(db, "households", hid, "debts", d.id), data);
       else await addDoc(collection(db, "households", hid, "debts"), data);
       closeModal(); toast("Dívida salva.");
+    } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+
+function modalNegotiate(d) {
+  const restante = Math.max(0, (d.currentValue ?? d.total) - (d.paid || 0));
+  const nextMonth10 = (() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth() + 1, 10).toISOString().slice(0, 10); })();
+  openModal(`
+    <h3>🤝 Negociar — ${esc(d.name)}</h3>
+    <p class="muted" style="margin:-8px 0 14px">Valor em aberto hoje: <b>${fmtBRL(restante)}</b>. Preencha as condições fechadas com o credor — o acordo vira parcelas em Boletos & Contas e cada pagamento abate esta dívida automaticamente.</p>
+    <div class="form-row">
+      <div class="field"><label>Valor total do acordo (R$)</label>
+        <input id="nTotal" inputmode="decimal" value="${String(restante.toFixed(2)).replace(".", ",")}">
+        <span class="hint">Com o desconto que você conseguiu</span></div>
+      <div class="field"><label>Entrada (R$, opcional)</label>
+        <input id="nEntry" inputmode="decimal" value="0"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Nº de parcelas (sem contar a entrada)</label>
+        <input id="nTimes" type="number" min="1" max="240" value="12"></div>
+      <div class="field"><label>Vencimento da 1ª parcela</label>
+        <input id="nFirst" type="date" value="${nextMonth10}"></div>
+    </div>
+    <div class="ai-box" id="nPreview" style="margin-bottom:14px"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" id="mCancel">Cancelar</button>
+      <button class="btn" id="mSave">Fechar acordo</button>
+    </div>`);
+  const preview = () => {
+    const tot = parseMoney($("#nTotal").value), ent = parseMoney($("#nEntry").value);
+    const n = Math.max(1, +$("#nTimes").value || 1);
+    const parcela = Math.max(0, Math.round((tot - ent) / n * 100) / 100);
+    $("#nPreview").innerHTML = `📋 Acordo: ${ent > 0 ? `entrada de <b>${fmtBRL(ent)}</b> + ` : ""}<b>${n}x de ${fmtBRL(parcela)}</b> = total ${fmtBRL(ent + parcela * n)}${tot < restante ? ` <span style="color:var(--good-text)">(desconto de ${fmtBRL(restante - tot)} 🎉)</span>` : ""}`;
+    return { tot, ent, n, parcela };
+  };
+  preview();
+  ["nTotal", "nEntry", "nTimes"].forEach(id => $("#" + id).oninput = preview);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const { ent, n, parcela } = preview();
+    if (!parcela && !ent) return toast("Informe o valor do acordo.");
+    const first = $("#nFirst").value || nextMonth10;
+    const totalAcordo = Math.round((ent + parcela * n) * 100) / 100;
+    try {
+      if (ent > 0) {
+        await addDoc(collection(db, "households", hid, "bills"), {
+          name: "Entrada acordo — " + d.name, amount: ent, dueDate: todayISO(),
+          category: "Dívidas", recurring: false, totalTimes: null, paidTimes: 0,
+          dda: false, status: "pendente", debtId: d.id, createdBy: user.email
+        });
+      }
+      await addDoc(collection(db, "households", hid, "bills"), {
+        name: "Acordo — " + d.name, amount: parcela, dueDate: first,
+        category: "Dívidas", recurring: n > 1, totalTimes: n > 1 ? n : null, paidTimes: 0,
+        dda: false, status: "pendente", debtId: d.id, createdBy: user.email
+      });
+      await updateDoc(doc(db, "households", hid, "debts", d.id), {
+        originalValue: d.originalValue ?? (d.currentValue ?? d.total),
+        currentValue: totalAcordo, paid: 0, monthlyPayment: parcela, status: "acordo",
+        note: ((d.note || "") + ` · 🤝 Acordo em ${todayISO().split("-").reverse().join("/")}: ${ent > 0 ? `entrada ${fmtBRL(ent)} + ` : ""}${n}x de ${fmtBRL(parcela)} (total ${fmtBRL(totalAcordo)})`).trim(),
+        updatedAt: new Date().toISOString()
+      });
+      closeModal();
+      toast("🤝 Acordo fechado! As parcelas estão em Boletos & Contas — cada pagamento abate a dívida.");
     } catch (e) { toast("Erro: " + e.message); }
   };
 }
@@ -1311,6 +1389,7 @@ function attachHandlers() {
   // dívidas
   $("#btnAddDebt") && ($("#btnAddDebt").onclick = () => modalDebt());
   $("#btnDebtAI") && ($("#btnDebtAI").onclick = debtStrategy);
+  document.querySelectorAll("[data-negotiate]").forEach(b => b.onclick = () => modalNegotiate(DEBTS.find(d => d.id === b.dataset.negotiate)));
   document.querySelectorAll("[data-edit-debt]").forEach(b => b.onclick = () => modalDebt(DEBTS.find(d => d.id === b.dataset.editDebt)));
   document.querySelectorAll("[data-del-debt]").forEach(b => b.onclick = async () => {
     if (confirm("Excluir esta dívida?")) await deleteDoc(doc(db, "households", hid, "debts", b.dataset.delDebt));
