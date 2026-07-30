@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<title>Minha Finança — Painel Financeiro Pessoal</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+<style>
+/* ============ TOKENS ============ */
+:root{
+  color-scheme: light;
+  --surface-1:#fcfcfb; --page:#f9f9f7;
+  --ink-1:#0b0b0b; --ink-2:#52514e; --ink-3:#898781;
+  --grid:#e1e0d9; --baseline:#c3c2b7;
+  --border:rgba(11,11,11,.10);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948;
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  --good-text:#006300;
+  --accent:#2a78d6; --accent-soft:rgba(42,120,214,.10);
+  --radius:14px; --shadow:0 1px 3px rgba(11,11,11,.06), 0 4px 16px rgba(11,11,11,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --surface-1:#1a1a19; --page:#0d0d0d;
+    --ink-1:#ffffff; --ink-2:#c3c2b7; --ink-3:#898781;
+    --grid:#2c2c2a; --baseline:#383835;
+    --border:rgba(255,255,255,.10);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    --good-text:#0ca30c;
+    --accent:#3987e5; --accent-soft:rgba(57,135,229,.14);
+    --shadow:0 1px 3px rgba(0,0,0,.35), 0 4px 16px rgba(0,0,0,.25);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --surface-1:#1a1a19; --page:#0d0d0d;
+  --ink-1:#ffffff; --ink-2:#c3c2b7; --ink-3:#898781;
+  --grid:#2c2c2a; --baseline:#383835;
+  --border:rgba(255,255,255,.10);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+  --good-text:#0ca30c;
+  --accent:#3987e5; --accent-soft:rgba(57,135,229,.14);
+  --shadow:0 1px 3px rgba(0,0,0,.35), 0 4px 16px rgba(0,0,0,.25);
+}
+
+/* ============ BASE ============ */
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{height:100%;}
+body{
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  background:var(--page); color:var(--ink-1);
+  font-size:15px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit; cursor:pointer;}
+input,select,textarea{font-family:inherit; font-size:15px; color:var(--ink-1);}
+a{color:var(--accent);}
+.hidden{display:none !important;}
+
+/* ============ LOGIN ============ */
+#loginScreen{
+  min-height:100dvh; display:flex; align-items:center; justify-content:center; padding:24px;
+}
+.login-card{
+  background:var(--surface-1); border:1px solid var(--border); border-radius:20px;
+  box-shadow:var(--shadow); padding:44px 36px; max-width:420px; width:100%; text-align:center;
+}
+.login-card .logo{font-size:44px;}
+.login-card h1{font-size:24px; margin:12px 0 6px;}
+.login-card p{color:var(--ink-2); margin-bottom:26px;}
+.btn-google{
+  display:flex; align-items:center; justify-content:center; gap:10px; width:100%;
+  padding:13px 18px; border-radius:12px; border:1px solid var(--border);
+  background:var(--surface-1); color:var(--ink-1); font-size:15px; font-weight:600;
+  transition:background .15s;
+}
+.btn-google:hover{background:var(--accent-soft);}
+#setupWarning{
+  margin-top:20px; text-align:left; background:var(--accent-soft); border-radius:12px;
+  padding:14px 16px; font-size:13.5px; color:var(--ink-2);
+}
+
+/* ============ SHELL ============ */
+#app{display:flex; min-height:100dvh;}
+aside{
+  width:232px; flex-shrink:0; background:var(--surface-1); border-right:1px solid var(--border);
+  padding:22px 14px; display:flex; flex-direction:column; gap:4px;
+  position:sticky; top:0; height:100dvh;
+}
+.brand{display:flex; align-items:center; gap:10px; font-weight:700; font-size:17px; padding:0 10px 18px;}
+.brand span{font-size:24px;}
+.nav-btn{
+  display:flex; align-items:center; gap:11px; width:100%; text-align:left;
+  padding:11px 12px; border-radius:10px; border:none; background:transparent;
+  color:var(--ink-2); font-size:14.5px; font-weight:500;
+}
+.nav-btn:hover{background:var(--accent-soft); color:var(--ink-1);}
+.nav-btn.active{background:var(--accent-soft); color:var(--accent); font-weight:600;}
+.nav-btn .ico{width:20px; text-align:center;}
+.sidebar-foot{margin-top:auto; padding:10px; font-size:13px; color:var(--ink-3); display:flex; flex-direction:column; gap:8px;}
+.user-chip{display:flex; align-items:center; gap:9px;}
+.user-chip img{width:30px; height:30px; border-radius:50%;}
+.link-btn{background:none; border:none; color:var(--accent); font-size:13px; padding:0; text-align:left;}
+
+main{flex:1; padding:26px 30px 90px; max-width:1120px; margin:0 auto; width:100%; min-width:0;}
+.view-head{display:flex; align-items:center; justify-content:space-between; gap:14px; margin-bottom:20px; flex-wrap:wrap;}
+.view-head h2{font-size:21px;}
+.view-head .sub{color:var(--ink-2); font-size:14px;}
+
+/* mobile nav */
+#mobileNav{display:none;}
+@media (max-width: 860px){
+  aside{display:none;}
+  main{padding:18px 16px 96px;}
+  #mobileNav{
+    display:flex; position:fixed; bottom:0; left:0; right:0; z-index:50;
+    background:var(--surface-1); border-top:1px solid var(--border);
+    padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+  }
+  #mobileNav button{
+    flex:1; background:none; border:none; color:var(--ink-3); font-size:10.5px;
+    display:flex; flex-direction:column; align-items:center; gap:2px; padding:6px 2px; border-radius:8px;
+  }
+  #mobileNav button .ico{font-size:19px;}
+  #mobileNav button.active{color:var(--accent);}
+}
+
+/* ============ COMPONENTS ============ */
+.card{
+  background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius);
+  box-shadow:var(--shadow); padding:20px;
+}
+.grid{display:grid; gap:14px;}
+.tiles{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));}
+.two-col{grid-template-columns:1fr 1fr;}
+@media (max-width:860px){.two-col{grid-template-columns:1fr;}}
+
+.tile .label{font-size:13px; color:var(--ink-2);}
+.tile .value{font-size:clamp(15px, 4.2vw, 24px); font-weight:600; margin-top:2px; white-space:nowrap;}
+.tile .delta{font-size:12.5px; margin-top:2px; color:var(--ink-3);}
+.delta.up{color:var(--good-text);}
+.delta.down{color:var(--critical);}
+
+.btn{
+  display:inline-flex; align-items:center; gap:8px; padding:10px 16px; border-radius:10px;
+  border:1px solid transparent; background:var(--accent); color:#fff; font-weight:600; font-size:14px;
+}
+.btn:hover{filter:brightness(1.08);}
+.btn.secondary{background:transparent; border-color:var(--border); color:var(--ink-1);}
+.btn.secondary:hover{background:var(--accent-soft);}
+.btn.danger{background:var(--critical);}
+.btn.small{padding:6px 11px; font-size:13px;}
+.btn:disabled{opacity:.55; cursor:default;}
+
+.field{display:flex; flex-direction:column; gap:5px; margin-bottom:13px;}
+.field label{font-size:13px; font-weight:600; color:var(--ink-2);}
+.field input,.field select,.field textarea{
+  padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+  background:var(--page); outline:none;
+}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--accent);}
+.field .hint{font-size:12px; color:var(--ink-3);}
+.form-row{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+@media (max-width:600px){.form-row{grid-template-columns:1fr;}}
+
+.seg{
+  display:inline-flex; background:var(--page); border:1px solid var(--border);
+  border-radius:10px; padding:3px; gap:2px;
+}
+.seg button{
+  border:none; background:transparent; padding:7px 14px; border-radius:8px;
+  font-size:13.5px; font-weight:600; color:var(--ink-2);
+}
+.seg button.active{background:var(--surface-1); color:var(--ink-1); box-shadow:var(--shadow);}
+.seg button.active.in{color:var(--good-text);}
+.seg button.active.out{color:var(--critical);}
+
+table{width:100%; border-collapse:collapse; font-size:14px;}
+th{
+  text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--ink-3); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--grid);
+}
+td{padding:10px; border-bottom:1px solid var(--grid); vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+td.num{font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap;}
+th.num{text-align:right;}
+.table-wrap{overflow-x:auto;}
+
+.chip{
+  display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:99px;
+  font-size:12.5px; font-weight:600; background:var(--accent-soft); color:var(--ink-2);
+  white-space:nowrap;
+}
+.chip .dot{width:8px; height:8px; border-radius:50%;}
+.badge{display:inline-flex; align-items:center; gap:5px; font-size:12.5px; font-weight:600; padding:3px 10px; border-radius:99px;}
+.badge.good{background:rgba(12,163,12,.12); color:var(--good-text);}
+.badge.warn{background:rgba(250,178,25,.15); color:#8a6200;}
+.badge.crit{background:rgba(208,59,59,.12); color:var(--critical);}
+:root[data-theme="dark"] .badge.warn{color:var(--warning);}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .badge.warn{color:var(--warning);} }
+
+.empty{
+  text-align:center; color:var(--ink-3); padding:34px 16px; font-size:14px;
+}
+.empty .big{font-size:34px; display:block; margin-bottom:8px;}
+
+.icon-btn{background:none; border:none; color:var(--ink-3); font-size:15px; padding:4px 6px; border-radius:6px;}
+.icon-btn:hover{background:var(--accent-soft); color:var(--ink-1);}
+
+/* meter */
+.meter{height:10px; border-radius:99px; background:var(--accent-soft); overflow:hidden;}
+.meter>div{height:100%; border-radius:99px; background:var(--accent); transition:width .4s;}
+.meter.warn>div{background:var(--warning);}
+.meter.crit>div{background:var(--critical);}
+.meter.good>div{background:var(--good);}
+
+/* chart */
+.chart-card h3, .card h3{font-size:15.5px; margin-bottom:4px;}
+.chart-sub{font-size:13px; color:var(--ink-2); margin-bottom:12px;}
+.legend{display:flex; gap:16px; flex-wrap:wrap; font-size:13px; color:var(--ink-2); margin-bottom:10px;}
+.legend .key{display:flex; align-items:center; gap:6px;}
+.legend .swatch{width:11px; height:11px; border-radius:3px;}
+svg text{font-family:inherit;}
+
+#tooltip{
+  position:fixed; z-index:100; pointer-events:none; background:var(--surface-1);
+  border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow);
+  padding:9px 12px; font-size:13px; display:none; max-width:260px;
+}
+#tooltip .t-title{font-weight:600; margin-bottom:3px;}
+#tooltip .t-row{display:flex; align-items:center; gap:7px; color:var(--ink-2);}
+#tooltip .t-row b{color:var(--ink-1); font-variant-numeric:tabular-nums; margin-left:auto; padding-left:12px;}
+
+/* AI chat */
+#chatLog{display:flex; flex-direction:column; gap:12px; max-height:52vh; overflow-y:auto; padding:4px 2px; margin-bottom:14px;}
+.msg{max-width:85%; padding:11px 14px; border-radius:14px; font-size:14.5px; white-space:pre-wrap;}
+.msg.user{align-self:flex-end; background:var(--accent); color:#fff; border-bottom-right-radius:4px;}
+.msg.ai{align-self:flex-start; background:var(--page); border:1px solid var(--border); border-bottom-left-radius:4px;}
+.msg.ai.thinking{color:var(--ink-3); font-style:italic;}
+.chat-input{display:flex; gap:9px;}
+.chat-input textarea{flex:1; resize:none; padding:11px 13px; border-radius:12px; border:1px solid var(--border); background:var(--page); outline:none; min-height:48px;}
+
+/* drop zone */
+.dropzone{
+  border:2px dashed var(--baseline); border-radius:var(--radius); padding:36px 20px;
+  text-align:center; color:var(--ink-2); transition:border-color .15s, background .15s;
+}
+.dropzone.drag{border-color:var(--accent); background:var(--accent-soft);}
+.dropzone .big{font-size:36px; display:block; margin-bottom:6px;}
+
+/* modal */
+#modalBack{
+  position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:60;
+  display:flex; align-items:center; justify-content:center; padding:18px;
+}
+.modal{
+  background:var(--surface-1); border-radius:18px; box-shadow:var(--shadow);
+  width:100%; max-width:520px; max-height:88dvh; overflow-y:auto; padding:24px;
+}
+.modal h3{font-size:17px; margin-bottom:16px;}
+.modal-actions{display:flex; justify-content:flex-end; gap:10px; margin-top:6px;}
+
+/* toast */
+#toast{
+  position:fixed; bottom:26px; left:50%; transform:translateX(-50%); z-index:120;
+  background:var(--ink-1); color:var(--page); padding:11px 20px; border-radius:12px;
+  font-size:14px; font-weight:500; box-shadow:var(--shadow); display:none; max-width:90vw; text-align:center;
+}
+@media (max-width:860px){ #toast{bottom:86px;} }
+
+.section-gap{margin-top:18px;}
+.muted{color:var(--ink-3); font-size:13px;}
+.flex{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.spread{justify-content:space-between;}
+.ai-box{background:var(--accent-soft); border-radius:12px; padding:14px 16px; font-size:14px; white-space:pre-wrap;}
+.loading-dots::after{content:"…"; animation:dots 1.2s infinite;}
+@keyframes dots{0%{content:"·"}33%{content:"··"}66%{content:"···"}}
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="logo">💰</div>
+    <h1>Minha Finança</h1>
+    <p>Seu painel financeiro pessoal com inteligência artificial.</p>
+    <button class="btn-google" id="btnLogin">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.3 6.1 29.4 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.3 6.1 29.4 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>
+      Entrar com Google
+    </button>
+    <div id="setupWarning" class="hidden">
+      ⚠️ <b>Configuração necessária:</b> o arquivo <code>firebase-config.js</code> ainda está com os valores de exemplo. Siga o passo a passo do <code>README.md</code> para conectar seu projeto Firebase.
+    </div>
+  </div>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="app" class="hidden">
+  <aside>
+    <div class="brand"><span>💰</span> Minha Finança</div>
+    <button class="nav-btn active" data-view="dashboard"><span class="ico">📊</span> Dashboard</button>
+    <button class="nav-btn" data-view="transacoes"><span class="ico">🧾</span> Transações</button>
+    <button class="nav-btn" data-view="comprovante"><span class="ico">📸</span> Comprovante IA</button>
+    <button class="nav-btn" data-view="dividas"><span class="ico">📉</span> Dívidas</button>
+    <button class="nav-btn" data-view="investimentos"><span class="ico">📈</span> Investimentos</button>
+    <button class="nav-btn" data-view="plano"><span class="ico">🎯</span> Plano 5 Anos</button>
+    <button class="nav-btn" data-view="consultor"><span class="ico">🤖</span> Consultor IA</button>
+    <button class="nav-btn" data-view="config"><span class="ico">⚙️</span> Configurações</button>
+    <div class="sidebar-foot">
+      <div class="user-chip"><img id="userPhoto" alt=""><span id="userName"></span></div>
+      <button class="link-btn" id="btnTheme">Alternar tema claro/escuro</button>
+      <button class="link-btn" id="btnLogout">Sair</button>
+    </div>
+  </aside>
+
+  <main id="mainContent"><!-- views renderizadas via JS --></main>
+
+  <nav id="mobileNav">
+    <button data-view="dashboard" class="active"><span class="ico">📊</span>Painel</button>
+    <button data-view="transacoes"><span class="ico">🧾</span>Extrato</button>
+    <button data-view="comprovante"><span class="ico">📸</span>IA Foto</button>
+    <button data-view="dividas"><span class="ico">📉</span>Dívidas</button>
+    <button data-view="consultor"><span class="ico">🤖</span>IA</button>
+    <button data-view="config"><span class="ico">⚙️</span>Ajustes</button>
+  </nav>
+</div>
+
+<div id="tooltip"></div>
+<div id="toast"></div>
+<div id="modalBack" class="hidden"><div class="modal" id="modalBox"></div></div>
+
+<script src="firebase-config.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
