@@ -19,7 +19,7 @@ let unsubs = [];
 let chatHistory = [];
 let receiptDraft = null;
 
-const CATS_OUT = ["Alimentação","Mercado","Moradia","Contas (água/luz/net)","Transporte","Saúde","Educação","Lazer","Assinaturas","Vestuário","Dívidas","Impostos/Taxas","Outros"];
+const CATS_OUT = ["Alimentação","Mercado","Moradia","Contas (água/luz/net)","Transporte","Saúde","Educação","Lazer","Assinaturas","Vestuário","Pet","Dívidas","Impostos/Taxas","Outros"];
 const CATS_IN = ["Salário/Pró-labore","Vendas","Freelance","Rendimentos","Reembolso","Outros"];
 const METHODS = ["PIX","Cartão de crédito","Cartão de débito","Dinheiro","Boleto","Transferência"];
 const ESSENTIAL = new Set(["Mercado","Moradia","Contas (água/luz/net)","Transporte","Saúde","Educação","Impostos/Taxas"]);
@@ -1001,7 +1001,7 @@ function viewOrcamento() {
 
 function modalBudgets() {
   const cur = SETTINGS.budgets || {};
-  const discretionary = ["Alimentação", "Lazer", "Assinaturas", "Vestuário", "Transporte", "Mercado"];
+  const discretionary = ["Alimentação", "Lazer", "Assinaturas", "Vestuário", "Transporte", "Mercado", "Pet"];
   const ordered = [...discretionary, ...CATS_OUT.filter(c => !discretionary.includes(c))];
   openModal(`
     <h3>Definir limites de gastos</h3>
