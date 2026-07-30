@@ -31,6 +31,10 @@ function catsIn() {
   const custom = (SETTINGS.customCatsIn || []);
   return [...CATS_IN_BASE.filter(c => c !== "Outros"), ...custom, "Outros"];
 }
+// chave da IA: preferir a compartilhada (settings); localStorage é fallback/override local
+function aiKey() { return (SETTINGS.claudeKey || localStorage.getItem("mf_claude_key") || "").trim(); }
+function hasAIKey() { return !!aiKey(); }
+
 async function addCustomCat(type, name) {
   name = (name || "").trim();
   if (!name) return false;
@@ -449,7 +453,7 @@ function tableTx(rows, actions) {
 // VIEW: COMPROVANTE IA
 // ============================================================
 function viewComprovante() {
-  const hasKey = !!localStorage.getItem("mf_claude_key");
+  const hasKey = hasAIKey();
   return `
   <div class="view-head">
     <div><h2>Comprovante IA</h2><div class="sub">Fotografe ou envie o comprovante — a IA lê, categoriza e registra</div></div>
@@ -523,7 +527,7 @@ function viewDividas() {
   <div class="card section-gap">
     <div class="flex spread" style="margin-bottom:8px">
       <h3>Dívidas ativas</h3>
-      <button class="btn secondary small" id="btnDebtAI" ${localStorage.getItem("mf_claude_key") ? "" : "disabled"}>🤖 Estratégia de quitação com IA</button>
+      <button class="btn secondary small" id="btnDebtAI" ${hasAIKey() ? "" : "disabled"}>🤖 Estratégia de quitação com IA</button>
     </div>
     <div id="debtAIBox" class="hidden section-gap"></div>
     ${!ativas.length ? `<div class="empty"><span class="big">🎉</span>Nenhuma dívida ativa.</div>` :
@@ -862,7 +866,7 @@ function viewPlano() {
   <div class="card section-gap">
     <div class="flex spread">
       <h3>🤖 Plano de ação com IA</h3>
-      <button class="btn" id="btnPlanAI" ${localStorage.getItem("mf_claude_key") ? "" : "disabled"}>Gerar meu plano</button>
+      <button class="btn" id="btnPlanAI" ${hasAIKey() ? "" : "disabled"}>Gerar meu plano</button>
     </div>
     <p class="muted" style="margin-top:6px">A IA analisa sua renda, gastos, dívidas e investimentos reais e monta um plano personalizado, mês a mês, para chegar ao seu primeiro milhão.</p>
     <div id="planAIBox" class="section-gap hidden"></div>
@@ -947,7 +951,7 @@ function viewOrcamento() {
   <div class="view-head">
     <div><h2>Orçamento do mês</h2><div class="sub">O que planejar com sua renda em ${monthLabel(mk)} — e se você está dentro</div></div>
     <div class="flex">
-      <button class="btn secondary" id="btnBudgetAI" ${localStorage.getItem("mf_claude_key") ? "" : "disabled"}>🤖 Sugerir com IA</button>
+      <button class="btn secondary" id="btnBudgetAI" ${hasAIKey() ? "" : "disabled"}>🤖 Sugerir com IA</button>
       <button class="btn" id="btnSetBudgets">Definir limites</button>
     </div>
   </div>
@@ -1108,7 +1112,7 @@ Inclua no budgets só categorias de gasto variável que fazem sentido limitar (e
 // VIEW: CONSULTOR IA
 // ============================================================
 function viewConsultor() {
-  const hasKey = !!localStorage.getItem("mf_claude_key");
+  const hasKey = hasAIKey();
   return `
   <div class="view-head">
     <div><h2>🤖 Consultor Financeiro IA</h2><div class="sub">Decisões com base nos seus números reais</div></div>
@@ -1137,7 +1141,8 @@ function viewConsultor() {
 // ============================================================
 function viewConfig() {
   const members = HOUSEHOLD.members || [];
-  const key = localStorage.getItem("mf_claude_key") || "";
+  const key = aiKey();
+  const keyShared = !!SETTINGS.claudeKey;
   return `
   <div class="view-head"><div><h2>Configurações</h2></div></div>
 
@@ -1201,9 +1206,14 @@ function viewConfig() {
 
   <div class="card section-gap">
     <h3>🤖 Inteligência Artificial (Claude)</h3>
-    <p class="muted" style="margin:6px 0 12px">Sua chave fica salva <b>somente neste dispositivo</b> (navegador) — nunca vai para o GitHub nem para o banco de dados. Crie a sua em <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> → API Keys.</p>
+    <p class="muted" style="margin:6px 0 12px">Crie sua chave em <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> → API Keys. ${keyShared ? '<b>A chave está compartilhada</b> com todos que você autorizou — eles usam a IA sem precisar configurar nada.' : "Marque a opção abaixo para compartilhar a chave com quem você autorizar."}</p>
     <div class="field"><label>Chave da API (sk-ant-...)</label>
       <input id="cfgApiKey" type="password" value="${esc(key)}" placeholder="sk-ant-api03-..."></div>
+    <div class="field" style="flex-direction:row; align-items:center; gap:9px">
+      <input type="checkbox" id="cfgShareKey" style="width:18px; height:18px" ${keyShared ? "checked" : ""}>
+      <label for="cfgShareKey" style="margin:0">Compartilhar a chave com os usuários autorizados</label>
+    </div>
+    <p class="muted" style="font-size:12px; margin:-4px 0 12px">Quando compartilhada, a chave é gravada no banco de dados do seu painel — protegido pelas regras do Firestore, acessível só aos e-mails que você liberou. Sem marcar, ela fica só neste dispositivo.</p>
     <div class="field"><label>Modelo</label>
       <select id="cfgModel">
         ${["claude-sonnet-4-5","claude-haiku-4-5","claude-opus-4-1"].map(m =>
@@ -1478,7 +1488,7 @@ function modalGoal() {
 // IA — Claude API
 // ============================================================
 async function callClaude({ system, messages, maxTokens = 1600 }) {
-  const key = localStorage.getItem("mf_claude_key");
+  const key = aiKey();
   if (!key) throw new Error("Configure sua chave da API em Configurações.");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -1753,13 +1763,23 @@ function attachHandlers() {
   });
   $("#btnSaveKey") && ($("#btnSaveKey").onclick = async () => {
     const k = $("#cfgApiKey").value.trim();
-    if (k) localStorage.setItem("mf_claude_key", k); else localStorage.removeItem("mf_claude_key");
-    await setDoc(doc(db, "households", hid, "meta", "settings"), { model: $("#cfgModel").value }, { merge: true });
-    toast("Chave salva neste dispositivo.");
+    const share = $("#cfgShareKey").checked;
+    const patch = { model: $("#cfgModel").value };
+    if (share) {
+      patch.claudeKey = k;                 // compartilhada no banco
+      localStorage.removeItem("mf_claude_key");
+    } else {
+      patch.claudeKey = "";                // remove a compartilhada
+      if (k) localStorage.setItem("mf_claude_key", k); else localStorage.removeItem("mf_claude_key");
+    }
+    SETTINGS.claudeKey = patch.claudeKey;   // reflete na hora
+    await setDoc(doc(db, "households", hid, "meta", "settings"), patch, { merge: true });
+    toast(share ? "🔐 Chave salva e compartilhada com os usuários autorizados." : "Chave salva neste dispositivo.");
   });
   $("#btnTestKey") && ($("#btnTestKey").onclick = async () => {
     const k = $("#cfgApiKey").value.trim();
-    if (k) localStorage.setItem("mf_claude_key", k);
+    if (k && !SETTINGS.claudeKey) localStorage.setItem("mf_claude_key", k);
+    else if (k) SETTINGS.claudeKey = k;
     toast("Testando…");
     try {
       await callClaude({ maxTokens: 20, messages: [{ role: "user", content: "Responda apenas: ok" }] });
