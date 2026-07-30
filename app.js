@@ -1238,7 +1238,8 @@ function modalDebt(d = null) {
       <div class="field"><label>Já pago (R$)</label><input id="dPaid" inputmode="decimal" value="${t.paid ?? 0}"></div>
     </div>
     <div class="form-row">
-      <div class="field"><label>Parcela mensal (R$)</label><input id="dMonthly" inputmode="decimal" value="${t.monthlyPayment ?? ""}"></div>
+      <div class="field"><label>Parcela mensal (R$)</label><input id="dMonthly" inputmode="decimal" value="${t.monthlyPayment ?? ""}">
+        <span class="hint">Ao salvar, o app oferece criar essas parcelas nos Boletos</span></div>
       <div class="field"><label>Juros % a.m. (se souber)</label><input id="dInterest" type="number" step="0.1" value="${t.interest ?? ""}"></div>
     </div>
     <div class="form-row">
@@ -1255,17 +1256,37 @@ function modalDebt(d = null) {
   $("#mSave").onclick = async () => {
     const name = $("#dName").value.trim();
     if (!name) return toast("Dê um nome à dívida.");
+    const monthly = parseMoney($("#dMonthly").value);
     const data = {
       name, currentValue: parseMoney($("#dTotal").value), total: parseMoney($("#dTotal").value),
-      paid: parseMoney($("#dPaid").value), monthlyPayment: parseMoney($("#dMonthly").value),
+      paid: parseMoney($("#dPaid").value), monthlyPayment: monthly,
       interest: $("#dInterest").value ? +$("#dInterest").value : null,
       status: $("#dStatus").value, dueDay: $("#dDue").value ? +$("#dDue").value : null,
       note: $("#dNote").value.trim(), updatedAt: new Date().toISOString()
     };
     try {
-      if (d) await updateDoc(doc(db, "households", hid, "debts", d.id), data);
-      else await addDoc(collection(db, "households", hid, "debts"), data);
+      let debtId;
+      if (d) { await updateDoc(doc(db, "households", hid, "debts", d.id), data); debtId = d.id; }
+      else { const ref = await addDoc(collection(db, "households", hid, "debts"), data); debtId = ref.id; }
       closeModal(); toast("Dívida salva.");
+      // oferecer gerar as parcelas nos Boletos (se houver parcela e ainda não existir boleto vinculado)
+      const jaTem = BILLS.some(b => b.debtId === debtId && !["pago", "encerrado", "convertido"].includes(b.status));
+      if (monthly > 0 && data.status !== "quitada" && !jaTem) {
+        const rest = Math.max(0, data.currentValue - data.paid);
+        const n = rest > 0 ? Math.ceil(rest / monthly) : 12;
+        if (confirm(`Criar as parcelas de ${fmtBRL(monthly)}/mês de "${name}" em Boletos & Contas? Serão ${n} parcela(s) e cada pagamento abate a dívida automaticamente.`)) {
+          const dd = data.dueDay || 10;
+          const now = new Date();
+          const firstDue = new Date(now.getFullYear(), now.getMonth() + (now.getDate() > dd ? 1 : 0), dd);
+          await addDoc(collection(db, "households", hid, "bills"), {
+            name, amount: monthly, dueDate: firstDue.toISOString().slice(0, 10), category: "Dívidas",
+            recurring: n > 1, totalTimes: n > 1 ? n : null, paidTimes: 0, dda: false,
+            status: "pendente", debtId, createdBy: user.email
+          });
+          await updateDoc(doc(db, "households", hid, "debts", debtId), { status: "acordo" });
+          toast(`📄 ${n} parcela(s) criadas em Boletos & Contas!`);
+        }
+      }
     } catch (e) { toast("Erro: " + e.message); }
   };
 }
