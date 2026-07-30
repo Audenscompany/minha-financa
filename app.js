@@ -13,7 +13,7 @@ import {
 
 // ---------- Estado global ----------
 let app, auth, db, user = null, hid = null;
-let TX = [], DEBTS = [], INVEST = [], SETTINGS = {}, HOUSEHOLD = {};
+let TX = [], DEBTS = [], INVEST = [], BILLS = [], SETTINGS = {}, HOUSEHOLD = {};
 let currentView = "dashboard";
 let unsubs = [];
 let chatHistory = [];
@@ -103,6 +103,7 @@ async function enterApp() {
   listen("transactions", arr => { TX = arr.sort((a,b) => b.date.localeCompare(a.date) || (b.createdAt||"").localeCompare(a.createdAt||"")); });
   listen("debts", arr => { DEBTS = arr; });
   listen("investments", arr => { INVEST = arr.sort((a,b) => b.date.localeCompare(a.date)); });
+  listen("bills", arr => { BILLS = arr.sort((a,b) => (a.dueDate||"").localeCompare(b.dueDate||"")); });
   unsubs.push(onSnapshot(doc(db, "households", hid, "meta", "settings"), s => {
     SETTINGS = s.exists() ? s.data() : {};
     render();
@@ -212,7 +213,7 @@ function render() {
   if (!el) return;
   const views = {
     dashboard: viewDashboard, transacoes: viewTransacoes, comprovante: viewComprovante,
-    dividas: viewDividas, investimentos: viewInvest, plano: viewPlano,
+    dividas: viewDividas, boletos: viewBoletos, investimentos: viewInvest, plano: viewPlano,
     consultor: viewConsultor, config: viewConfig
   };
   el.innerHTML = (views[currentView] || viewDashboard)();
@@ -281,10 +282,31 @@ function viewDashboard() {
     <div class="muted" style="margin-top:6px">${fmtBRL0(plan.current)} acumulados de ${fmtBRL0(plan.goal)}</div>
   </div>
 
+  ${dashUpcomingBills()}
+
   <div class="card section-gap">
     <h3>Últimas transações</h3>
     ${tableTx(TX.slice(0, 6), false)}
   </div>`;
+}
+
+function dashUpcomingBills() {
+  const today = todayISO();
+  const limit = new Date(); limit.setDate(limit.getDate() + 15);
+  const lim = limit.toISOString().slice(0, 10);
+  const soon = pendingBills().filter(b => b.dueDate <= lim).slice(0, 5);
+  if (!soon.length) return "";
+  return `<div class="card section-gap">
+    <div class="flex spread"><h3>📄 Próximos vencimentos</h3>
+      <button class="btn secondary small" data-goto="boletos">Ver todos →</button></div>
+    <div class="table-wrap"><table><tbody>
+    ${soon.map(b => {
+      const isOver = b.dueDate < today, isToday = b.dueDate === today;
+      return `<tr>
+      <td style="white-space:nowrap"><span class="badge ${isOver ? "crit" : isToday ? "warn" : "good"}">${isOver ? "⛔ venceu" : isToday ? "hoje" : b.dueDate.split("-").reverse().slice(0,2).join("/")}</span></td>
+      <td>${esc(b.name)}${b.dda ? ' <span class="chip">DDA</span>' : ""}</td>
+      <td class="num">${fmtBRL(b.amount)}</td></tr>`;}).join("")}
+    </tbody></table></div></div>`;
 }
 
 // ---- Gráfico: barras 6 meses (SVG) ----
@@ -494,6 +516,171 @@ function viewDividas() {
 }
 
 // ============================================================
+// VIEW: BOLETOS & CONTAS
+// ============================================================
+function addMonthISO(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const last = new Date(y, m + 1, 0).getDate(); // último dia do mês seguinte
+  const day = Math.min(d, last);
+  return new Date(y, m, day).toISOString().slice(0, 10);
+}
+function billTimesLabel(b) {
+  if (!b.recurring) return "única";
+  const done = (b.paidTimes || 0) + 1;
+  return b.totalTimes ? `${done}ª de ${b.totalTimes}x` : `${done}ª · repete sempre`;
+}
+function pendingBills() {
+  return BILLS.filter(b => !["pago", "encerrado", "convertido"].includes(b.status));
+}
+
+function viewBoletos() {
+  const today = todayISO();
+  const mk = today.slice(0, 7);
+  const pend = pendingBills();
+  const overdue = pend.filter(b => b.dueDate < today);
+  const monthSum = pend.filter(b => monthKey(b.dueDate) === mk).reduce((a, b) => a + b.amount, 0);
+  const ddaCount = pend.filter(b => b.dda).length;
+  const done = BILLS.filter(b => ["pago", "encerrado", "convertido"].includes(b.status)).slice(-8).reverse();
+
+  return `
+  <div class="view-head">
+    <div><h2>Boletos & Contas</h2><div class="sub">Contas a pagar, recorrências e boletos DDA no seu CPF</div></div>
+    <button class="btn" id="btnAddBill">+ Novo boleto/conta</button>
+  </div>
+
+  <div class="grid tiles">
+    <div class="card tile"><div class="label">A pagar em ${monthLabel(mk)}</div><div class="value">${fmtBRL(monthSum)}</div></div>
+    <div class="card tile"><div class="label">Vencidos</div>
+      <div class="value" style="color:${overdue.length ? "var(--critical)" : "var(--good-text)"}">${overdue.length}</div>
+      <div class="delta">${overdue.length ? fmtBRL(overdue.reduce((a,b)=>a+b.amount,0)) + " em atraso" : "tudo em dia 🎉"}</div></div>
+    <div class="card tile"><div class="label">Boletos DDA</div><div class="value">${ddaCount}</div>
+      <div class="delta">registrados no seu CPF</div></div>
+  </div>
+
+  <div class="card section-gap">
+    <h3>Contas pendentes</h3>
+    ${!pend.length ? `<div class="empty"><span class="big">📭</span>Nenhuma conta pendente. Cadastre boletos, assinaturas e contas do mês.</div>` :
+    `<div class="table-wrap"><table>
+      <thead><tr><th>Vencimento</th><th>Conta</th><th class="num">Valor</th><th>Recorrência</th><th></th></tr></thead>
+      <tbody>${pend.map(b => {
+        const isOver = b.dueDate < today;
+        const isToday = b.dueDate === today;
+        return `<tr>
+        <td style="white-space:nowrap">
+          <span class="badge ${isOver ? "crit" : isToday ? "warn" : "good"}">${isOver ? "⛔ venceu" : isToday ? "hoje" : b.dueDate.split("-").reverse().slice(0,2).join("/")}</span>
+        </td>
+        <td><b>${esc(b.name)}</b>${b.dda ? ' <span class="chip" title="Boleto DDA no seu CPF">DDA</span>' : ""}
+          <div class="muted">${esc(b.category || "")}</div></td>
+        <td class="num">${fmtBRL(b.amount)}</td>
+        <td><span class="chip">${b.recurring ? "🔁 " : ""}${billTimesLabel(b)}</span></td>
+        <td style="white-space:nowrap">
+          <button class="icon-btn" title="Marcar como pago" data-pay-bill="${b.id}">💵</button>
+          <button class="icon-btn" title="Transformar em dívida" data-debt-bill="${b.id}">📉</button>
+          <button class="icon-btn" data-edit-bill="${b.id}">✏️</button>
+          <button class="icon-btn" data-del-bill="${b.id}">🗑️</button></td>
+      </tr>`;}).join("")}</tbody></table></div>`}
+    <p class="muted section-gap">💡 <b>Pagar</b> registra a saída automaticamente e, se a conta for recorrente, agenda o próximo mês. <b>📉 Transformar em dívida</b> leva o boleto não pago para o Planejamento de Dívidas.</p>
+  </div>
+
+  ${done.length ? `<div class="card section-gap">
+    <h3>Histórico recente</h3>
+    <div class="table-wrap"><table><tbody>
+    ${done.map(b => `<tr><td>${esc(b.name)}</td><td class="num">${fmtBRL(b.amount)}</td>
+      <td><span class="badge ${b.status === "convertido" ? "crit" : "good"}">${b.status === "convertido" ? "virou dívida" : b.status}</span></td></tr>`).join("")}
+    </tbody></table></div></div>` : ""}`;
+}
+
+function modalBill(b = null) {
+  const t = b || {};
+  openModal(`
+    <h3>${b ? "Editar" : "Novo"} boleto / conta</h3>
+    <div class="field"><label>Nome da conta</label><input id="bName" value="${esc(t.name || "")}" placeholder="Ex.: Energia CEMIG, Aluguel, Internet"></div>
+    <div class="form-row">
+      <div class="field"><label>Valor (R$)</label><input id="bAmount" inputmode="decimal" value="${t.amount != null ? String(t.amount).replace(".", ",") : ""}" placeholder="0,00"></div>
+      <div class="field"><label>Vencimento</label><input id="bDue" type="date" value="${t.dueDate || todayISO()}"></div>
+    </div>
+    <div class="field"><label>Categoria (para o registro da saída)</label>
+      <select id="bCat">${CATS_OUT.map(c => `<option ${(t.category || "Contas (água/luz/net)") === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
+    <div class="field" style="flex-direction:row; align-items:center; gap:9px">
+      <input type="checkbox" id="bRecurring" style="width:18px; height:18px" ${t.recurring ? "checked" : ""}>
+      <label for="bRecurring" style="margin:0">🔁 Esta conta se repete todo mês</label>
+    </div>
+    <div class="field ${t.recurring ? "" : "hidden"}" id="bTimesRow">
+      <label>Quantas vezes ela se repete?</label>
+      <input id="bTimes" type="number" min="2" max="480" value="${t.totalTimes ?? ""}" placeholder="deixe vazio para repetir sempre">
+      <span class="hint">Ex.: parcelamento em 12x → digite 12. Conta fixa (luz, aluguel) → deixe vazio.</span>
+    </div>
+    <div class="field" style="flex-direction:row; align-items:center; gap:9px">
+      <input type="checkbox" id="bDda" style="width:18px; height:18px" ${t.dda ? "checked" : ""}>
+      <label for="bDda" style="margin:0">📄 É boleto DDA registrado no meu CPF</label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" id="mCancel">Cancelar</button>
+      <button class="btn" id="mSave">Salvar</button>
+    </div>`);
+  $("#bRecurring").onchange = e => $("#bTimesRow").classList.toggle("hidden", !e.target.checked);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const amount = parseMoney($("#bAmount").value);
+    const name = $("#bName").value.trim();
+    if (!name || !amount) return toast("Preencha nome e valor.");
+    const recurring = $("#bRecurring").checked;
+    const data = {
+      name, amount, dueDate: $("#bDue").value || todayISO(),
+      category: $("#bCat").value, recurring,
+      totalTimes: recurring && $("#bTimes").value ? +$("#bTimes").value : null,
+      paidTimes: t.paidTimes || 0,
+      dda: $("#bDda").checked,
+      status: t.status || "pendente",
+      createdBy: user.email
+    };
+    try {
+      if (b) await updateDoc(doc(db, "households", hid, "bills", b.id), data);
+      else await addDoc(collection(db, "households", hid, "bills"), data);
+      closeModal(); toast("Conta salva.");
+    } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+
+async function payBill(b) {
+  try {
+    await addDoc(collection(db, "households", hid, "transactions"), {
+      type: "saida", amount: b.amount, date: todayISO(),
+      desc: "Boleto: " + b.name, category: b.category || "Contas (água/luz/net)",
+      method: "Boleto", createdBy: user.email, createdAt: new Date().toISOString()
+    });
+    const paidTimes = (b.paidTimes || 0) + 1;
+    const continues = b.recurring && (!b.totalTimes || paidTimes < b.totalTimes);
+    if (continues) {
+      await updateDoc(doc(db, "households", hid, "bills", b.id), {
+        paidTimes, dueDate: addMonthISO(b.dueDate)
+      });
+      toast(`💵 Pago! Próxima cobrança agendada para ${addMonthISO(b.dueDate).split("-").reverse().slice(0,2).join("/")}.`);
+    } else {
+      await updateDoc(doc(db, "households", hid, "bills", b.id), {
+        paidTimes, status: b.recurring ? "encerrado" : "pago"
+      });
+      toast(b.recurring ? "💵 Pago! Recorrência concluída — todas as parcelas quitadas. 🎉" : "💵 Conta paga e registrada!");
+    }
+  } catch (e) { toast("Erro: " + e.message); }
+}
+
+async function billToDebt(b) {
+  if (!confirm(`Transformar "${b.name}" (${fmtBRL(b.amount)}) em dívida no Planejamento?`)) return;
+  try {
+    await addDoc(collection(db, "households", hid, "debts"), {
+      name: b.name, total: b.amount, currentValue: b.amount, paid: 0,
+      monthlyPayment: 0, interest: null, status: "atrasada",
+      dueDay: b.dueDate ? +b.dueDate.split("-")[2] : null,
+      note: "Originado de boleto" + (b.dda ? " DDA" : "") + " não pago (venc. " + b.dueDate.split("-").reverse().join("/") + ")",
+      updatedAt: new Date().toISOString()
+    });
+    await updateDoc(doc(db, "households", hid, "bills", b.id), { status: "convertido" });
+    toast("📉 Boleto virou dívida — veja no Planejamento de Dívidas.");
+  } catch (e) { toast("Erro: " + e.message); }
+}
+
+// ============================================================
 // VIEW: INVESTIMENTOS
 // ============================================================
 function viewInvest() {
@@ -700,9 +887,13 @@ function viewConfig() {
 
   <div class="card section-gap">
     <h3>📦 Dados</h3>
+    <p class="muted" style="margin:6px 0 4px">Importe dívidas, boletos e transações de um arquivo JSON no formato <code>{"dividas":[...], "boletos":[...], "transacoes":[...]}</code>.</p>
     <div class="flex section-gap">
       <button class="btn secondary" id="btnExport">Exportar tudo (JSON)</button>
+      <button class="btn secondary" id="btnImport">Importar dados (JSON)</button>
+      <input type="file" id="importFile" accept=".json,application/json" class="hidden">
     </div>
+    <div id="importStatus" class="muted section-gap"></div>
   </div>`;
 }
 
@@ -907,6 +1098,7 @@ function financialContext() {
 - Dívidas ativas: ${debts}
 - Total dívidas em aberto: ${dt.open.toFixed(0)}; parcelas atuais: ${dt.monthly.toFixed(0)}/mês
 - Limite recomendado p/ dívidas: ${(SETTINGS.debtPct ?? 30)}% da renda
+- Boletos/contas pendentes: ${pendingBills().map(b => `${b.name} ${b.amount.toFixed(0)} venc ${b.dueDate}${b.dda ? " (DDA)" : ""}${b.recurring ? " (recorrente)" : ""}`).join("; ") || "nenhum"}
 - Total investido: ${investedTotal().toFixed(0)}
 - META: ${p.goal} em ${SETTINGS.goalYears || 5} anos. Faltam ${p.monthsLeft} meses. Aporte necessário: ${p.pmt.toFixed(0)}/mês com ${(p.rate*100).toFixed(2)}% a.m.
 - % da renda destinado a investir: ${SETTINGS.investPct ?? 20}%`;
@@ -1085,6 +1277,15 @@ function attachHandlers() {
     toast(rest <= 0 ? "🎉 Dívida quitada! Parabéns!" : "Pagamento registrado.");
   });
 
+  // boletos
+  $("#btnAddBill") && ($("#btnAddBill").onclick = () => modalBill());
+  document.querySelectorAll("[data-edit-bill]").forEach(b => b.onclick = () => modalBill(BILLS.find(x => x.id === b.dataset.editBill)));
+  document.querySelectorAll("[data-del-bill]").forEach(b => b.onclick = async () => {
+    if (confirm("Excluir esta conta?")) await deleteDoc(doc(db, "households", hid, "bills", b.dataset.delBill));
+  });
+  document.querySelectorAll("[data-pay-bill]").forEach(b => b.onclick = () => payBill(BILLS.find(x => x.id === b.dataset.payBill)));
+  document.querySelectorAll("[data-debt-bill]").forEach(b => b.onclick = () => billToDebt(BILLS.find(x => x.id === b.dataset.debtBill)));
+
   // investimentos
   $("#btnAddInv") && ($("#btnAddInv").onclick = modalInvest);
   document.querySelectorAll("[data-del-inv]").forEach(b => b.onclick = async () => {
@@ -1141,8 +1342,57 @@ function attachHandlers() {
     if (confirm("Remover acesso de " + b.dataset.rmMember + "?"))
       await updateDoc(doc(db, "households", hid), { members: arrayRemove(b.dataset.rmMember) });
   });
+  $("#btnImport") && ($("#btnImport").onclick = () => $("#importFile").click());
+  const impF = $("#importFile");
+  if (impF) impF.onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const st = $("#importStatus");
+    try {
+      const data = JSON.parse(await file.text());
+      const dividas = data.dividas || [], boletos = data.boletos || [], transacoes = data.transacoes || [];
+      const total = dividas.length + boletos.length + transacoes.length;
+      if (!total) { st.textContent = "⚠️ Arquivo válido, mas sem itens para importar."; return; }
+      if (!confirm(`Importar ${dividas.length} dívida(s), ${boletos.length} boleto(s) e ${transacoes.length} transação(ões)?`)) return;
+      let done = 0;
+      st.textContent = "Importando…";
+      for (const d of dividas) {
+        await addDoc(collection(db, "households", hid, "debts"), {
+          name: String(d.name || "Dívida"), total: +d.currentValue || +d.total || 0,
+          currentValue: +d.currentValue || +d.total || 0, paid: +d.paid || 0,
+          monthlyPayment: +d.monthlyPayment || 0, interest: d.interest != null ? +d.interest : null,
+          status: d.status || "atrasada", dueDay: d.dueDay != null ? +d.dueDay : null,
+          note: String(d.note || ""), updatedAt: new Date().toISOString()
+        });
+        st.textContent = `Importando… ${++done}/${total}`;
+      }
+      for (const b of boletos) {
+        await addDoc(collection(db, "households", hid, "bills"), {
+          name: String(b.name || "Conta"), amount: +b.amount || 0,
+          dueDate: b.dueDate || todayISO(), category: b.category || "Contas (água/luz/net)",
+          recurring: !!b.recurring, totalTimes: b.totalTimes != null ? +b.totalTimes : null,
+          paidTimes: +b.paidTimes || 0, dda: !!b.dda, status: b.status || "pendente",
+          createdBy: user.email
+        });
+        st.textContent = `Importando… ${++done}/${total}`;
+      }
+      for (const t of transacoes) {
+        await addDoc(collection(db, "households", hid, "transactions"), {
+          type: t.type === "entrada" ? "entrada" : "saida", amount: +t.amount || 0,
+          date: t.date || todayISO(), desc: String(t.desc || ""),
+          category: t.category || "Outros", method: t.method || "PIX",
+          createdBy: user.email, createdAt: new Date().toISOString()
+        });
+        st.textContent = `Importando… ${++done}/${total}`;
+      }
+      st.textContent = `✅ Importação concluída: ${total} item(ns).`;
+      toast("✅ Dados importados com sucesso!");
+    } catch (err) {
+      st.textContent = "⚠️ Erro na importação: " + err.message;
+    } finally { e.target.value = ""; }
+  };
   $("#btnExport") && ($("#btnExport").onclick = () => {
-    const blob = new Blob([JSON.stringify({ exportadoEm: new Date().toISOString(), transacoes: TX, dividas: DEBTS, investimentos: INVEST, config: SETTINGS }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ exportadoEm: new Date().toISOString(), transacoes: TX, dividas: DEBTS, boletos: BILLS, investimentos: INVEST, config: SETTINGS }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "minha-financa-backup-" + todayISO() + ".json";
