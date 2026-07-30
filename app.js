@@ -213,8 +213,8 @@ function render() {
   if (!el) return;
   const views = {
     dashboard: viewDashboard, transacoes: viewTransacoes, comprovante: viewComprovante,
-    dividas: viewDividas, boletos: viewBoletos, investimentos: viewInvest, plano: viewPlano,
-    consultor: viewConsultor, config: viewConfig
+    dividas: viewDividas, boletos: viewBoletos, orcamento: viewOrcamento, investimentos: viewInvest,
+    plano: viewPlano, consultor: viewConsultor, config: viewConfig
   };
   el.innerHTML = (views[currentView] || viewDashboard)();
   attachHandlers();
@@ -872,6 +872,208 @@ function chartProjection(p) {
 }
 
 // ============================================================
+// VIEW: ORÇAMENTO (PLANEJADO)
+// ============================================================
+// contas fixas mensais = boletos recorrentes ainda ativos (inclui parcelas de acordo)
+function fixedBills() {
+  return pendingBills().filter(b => b.recurring);
+}
+function fixedMonthlyTotal() {
+  return fixedBills().reduce((a, b) => a + b.amount, 0);
+}
+function getBudgets() {
+  const b = SETTINGS.budgets || {};
+  return Object.entries(b).filter(([, v]) => +v > 0).map(([c, v]) => [c, +v]);
+}
+function budgetLevel(spent, limit) {
+  if (!limit) return "good";
+  const p = spent / limit * 100;
+  return p > 100 ? "crit" : p >= 85 ? "warn" : "good";
+}
+
+function viewOrcamento() {
+  const mk = todayISO().slice(0, 7);
+  const renda = SETTINGS.incomeTarget || avgIncome();
+  const fixas = fixedMonthlyTotal();
+  const budgets = getBudgets();
+  const budgetTotal = budgets.reduce((a, [, v]) => a + v, 0);
+  const sobra = renda - fixas - budgetTotal;
+
+  // planejado x real (categorias com limite)
+  const spentByCat = Object.fromEntries(catSpend(mk));
+  const spentBudgeted = budgets.reduce((a, [c]) => a + (spentByCat[c] || 0), 0);
+
+  // dia do mês para ritmo esperado
+  const now = new Date();
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const monthPct = dayOfMonth / daysInMonth * 100;
+
+  // categorias com gasto no mês SEM limite definido (sugerir criar)
+  const semLimite = catSpend(mk).filter(([c]) => !(SETTINGS.budgets || {})[c] && !ESSENTIAL.has(c)).slice(0, 4);
+
+  return `
+  <div class="view-head">
+    <div><h2>Orçamento do mês</h2><div class="sub">O que planejar com sua renda em ${monthLabel(mk)} — e se você está dentro</div></div>
+    <div class="flex">
+      <button class="btn secondary" id="btnBudgetAI" ${localStorage.getItem("mf_claude_key") ? "" : "disabled"}>🤖 Sugerir com IA</button>
+      <button class="btn" id="btnSetBudgets">Definir limites</button>
+    </div>
+  </div>
+
+  <div class="grid tiles">
+    <div class="card tile"><div class="label">Renda planejada</div><div class="value">${fmtBRL(renda)}</div>
+      <div class="delta">ajuste em Configurações</div></div>
+    <div class="card tile"><div class="label">Contas fixas</div><div class="value">${fmtBRL(fixas)}</div>
+      <div class="delta">${fixedBills().length} conta(s) recorrente(s)</div></div>
+    <div class="card tile"><div class="label">Limites de gastos</div><div class="value">${fmtBRL(budgetTotal)}</div>
+      <div class="delta">${budgets.length} categoria(s) com limite</div></div>
+    <div class="card tile"><div class="label">Sobra p/ metas</div>
+      <div class="value" style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</div>
+      <div class="delta">${sobra >= 0 ? "disponível p/ investir/guardar" : "⚠️ orçamento acima da renda"}</div></div>
+  </div>
+
+  <div id="budgetAIBox" class="section-gap hidden"></div>
+
+  <div class="card section-gap">
+    <div class="flex spread" style="margin-bottom:4px">
+      <h3>Planejado × gasto real</h3>
+      <span class="muted">${monthLabel(mk)} · dia ${dayOfMonth}/${daysInMonth}</span>
+    </div>
+    ${budgets.length ? `
+    <div class="flex" style="gap:18px; margin:8px 0 14px; font-size:14px; flex-wrap:wrap">
+      <span>Limite total: <b>${fmtBRL(budgetTotal)}</b></span>
+      <span>Gasto até agora: <b style="color:${spentBudgeted > budgetTotal ? "var(--critical)" : "var(--good-text)"}">${fmtBRL(spentBudgeted)}</b></span>
+      <span>Restante: <b>${fmtBRL(Math.max(0, budgetTotal - spentBudgeted))}</b></span>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:14px">
+      ${budgets.sort((a,b) => (spentByCat[b[0]]||0)/b[1] - (spentByCat[a[0]]||0)/a[1]).map(([c, limit]) => {
+        const spent = spentByCat[c] || 0;
+        const pct = limit ? spent / limit * 100 : 0;
+        const lvl = budgetLevel(spent, limit);
+        const over = spent > limit;
+        return `<div>
+          <div class="flex spread" style="font-size:14px; margin-bottom:4px">
+            <span><b>${esc(c)}</b> ${over ? '<span class="badge crit" style="margin-left:6px">estourou</span>' : pct >= 85 ? '<span class="badge warn" style="margin-left:6px">no limite</span>' : '<span class="badge good" style="margin-left:6px">dentro</span>'}</span>
+            <span style="font-variant-numeric:tabular-nums">${fmtBRL(spent)} <span class="muted">/ ${fmtBRL(limit)}</span></span>
+          </div>
+          <div class="meter ${lvl}" style="position:relative">
+            <div style="width:${Math.min(100, pct).toFixed(1)}%"></div>
+            <div title="ritmo esperado do mês" style="position:absolute; top:-2px; bottom:-2px; left:${Math.min(100, monthPct).toFixed(1)}%; width:2px; background:var(--ink-3); opacity:.6"></div>
+          </div>
+          <div class="muted" style="margin-top:3px; font-size:12px">${over ? `passou ${fmtBRL(spent - limit)} do limite` : `restam ${fmtBRL(limit - spent)}`} · a linha cinza marca o ritmo esperado (${monthPct.toFixed(0)}% do mês)</div>
+        </div>`;
+      }).join("")}
+    </div>` : `<div class="empty"><span class="big">🧮</span>Você ainda não definiu limites de gastos.<br>Clique em <b>Definir limites</b> ou peça uma <b>sugestão à IA</b>.</div>`}
+    ${semLimite.length ? `<div class="ai-box section-gap">💡 Você gastou nestas categorias sem limite definido: ${semLimite.map(([c, v]) => `<b>${esc(c)}</b> (${fmtBRL0(v)})`).join(", ")}. Que tal definir um teto para elas?</div>` : ""}
+  </div>
+
+  <div class="card section-gap">
+    <h3>📄 Suas contas fixas mensais</h3>
+    <div class="chart-sub">Puxadas automaticamente dos boletos recorrentes</div>
+    ${fixedBills().length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Conta</th><th>Categoria</th><th class="num">Valor/mês</th></tr></thead>
+      <tbody>${fixedBills().map(b => `<tr>
+        <td><b>${esc(b.name)}</b></td><td><span class="chip">${esc(b.category)}</span></td>
+        <td class="num">${fmtBRL(b.amount)}</td></tr>`).join("")}
+        <tr><td colspan="2"><b>Total comprometido/mês</b></td><td class="num"><b>${fmtBRL(fixedMonthlyTotal())}</b></td></tr>
+      </tbody></table></div>
+      <div class="muted section-gap">Isso representa <b>${renda > 0 ? (fixas / renda * 100).toFixed(0) : 0}%</b> da sua renda já comprometido antes de qualquer gasto variável.</div>`
+    : `<div class="empty"><span class="big">📭</span>Nenhuma conta fixa cadastrada. Adicione contas recorrentes em <a href="#" data-goto="boletos">Boletos & Contas</a>.</div>`}
+  </div>
+
+  <div class="card section-gap">
+    <h3>🎯 Regra 50/30/20 — referência</h3>
+    <p class="muted" style="margin:6px 0 14px">Uma divisão saudável e simples da renda. Compare com o seu orçamento acima.</p>
+    ${[["Essenciais (necessidades)", 0.5, "moradia, contas, mercado, transporte, saúde"],
+       ["Estilo de vida (desejos)", 0.3, "delivery, lazer, assinaturas, compras"],
+       ["Futuro (investir + quitar dívidas)", 0.2, "aportes e amortização de dívidas"]].map(([label, frac, ex]) => `
+      <div style="margin-bottom:12px">
+        <div class="flex spread" style="font-size:14px; margin-bottom:4px">
+          <span><b>${label}</b> — ${(frac*100)}%</span>
+          <b style="font-variant-numeric:tabular-nums">${fmtBRL(renda * frac)}</b>
+        </div>
+        <div class="meter"><div style="width:${frac*100}%"></div></div>
+        <div class="muted" style="font-size:12px; margin-top:3px">${ex}</div>
+      </div>`).join("")}
+  </div>`;
+}
+
+function modalBudgets() {
+  const cur = SETTINGS.budgets || {};
+  const discretionary = ["Alimentação", "Lazer", "Assinaturas", "Vestuário", "Transporte", "Mercado"];
+  const ordered = [...discretionary, ...CATS_OUT.filter(c => !discretionary.includes(c))];
+  openModal(`
+    <h3>Definir limites de gastos</h3>
+    <p class="muted" style="margin:-8px 0 14px">Defina um teto mensal por categoria. Deixe em branco (ou 0) as que não quer limitar. As de estilo de vida estão no topo.</p>
+    <div class="field"><label>Renda planejada do mês (R$)</label>
+      <input id="uIncome" inputmode="decimal" value="${String(SETTINGS.incomeTarget || 17500).replace(".", ",")}"></div>
+    <div style="max-height:44vh; overflow-y:auto; padding-right:4px">
+      ${ordered.map(c => `
+      <div class="flex spread" style="padding:6px 0; border-bottom:1px solid var(--grid)">
+        <label style="font-size:14px; margin:0">${esc(c)}</label>
+        <input class="bud-inp" data-cat="${esc(c)}" inputmode="decimal" placeholder="0,00"
+          value="${cur[c] ? String(cur[c]).replace(".", ",") : ""}"
+          style="width:120px; padding:8px 10px; border-radius:8px; border:1px solid var(--border); background:var(--page); text-align:right">
+      </div>`).join("")}
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" id="mCancel">Cancelar</button>
+      <button class="btn" id="mSave">Salvar orçamento</button>
+    </div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const budgets = {};
+    document.querySelectorAll(".bud-inp").forEach(i => { budgets[i.dataset.cat] = parseMoney(i.value); });
+    try {
+      await setDoc(doc(db, "households", hid, "meta", "settings"), {
+        incomeTarget: parseMoney($("#uIncome").value) || (SETTINGS.incomeTarget || 17500),
+        budgets
+      }, { merge: true });
+      closeModal(); toast("Orçamento salvo!");
+    } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+
+async function budgetSuggestAI() {
+  const box = $("#budgetAIBox");
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="ai-box loading-dots">🤖 Analisando seus gastos e montando um orçamento</div>`;
+  try {
+    const raw = await callClaude({
+      maxTokens: 1500,
+      system: `Você é um consultor financeiro brasileiro. Com base nos dados reais do usuário, proponha limites mensais de gastos por categoria seguindo a lógica 50/30/20 e o padrão de gastos dele. Categorias válidas: ${CATS_OUT.join(", ")}. Considere que as contas fixas recorrentes já estão comprometidas. Responda APENAS com JSON válido, sem markdown:
+{"resumo":"2-3 frases explicando a lógica e onde ele pode cortar","budgets":{"Categoria":valor_numerico, ...}}
+Inclua no budgets só categorias de gasto variável que fazem sentido limitar (ex.: Alimentação, Lazer, Assinaturas, Mercado, Transporte, Vestuário). Valores realistas para a renda dele.`,
+      messages: [{ role: "user", content: "Monte um orçamento mensal de limites por categoria para mim." }]
+    });
+    const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    const b = json.budgets || {};
+    box.innerHTML = `<div class="card" style="border-color:var(--accent)">
+      <h3>🤖 Sugestão de orçamento</h3>
+      <p style="margin:6px 0 12px">${esc(json.resumo || "")}</p>
+      <div class="table-wrap"><table><tbody>
+      ${Object.entries(b).map(([c, v]) => `<tr><td>${esc(c)}</td><td class="num"><b>${fmtBRL(+v)}</b></td></tr>`).join("")}
+      <tr><td><b>Total dos limites</b></td><td class="num"><b>${fmtBRL(Object.values(b).reduce((a,v)=>a+ +v,0))}</b></td></tr>
+      </tbody></table></div>
+      <div class="flex section-gap">
+        <button class="btn" id="btnApplyBudget">✅ Aplicar estes limites</button>
+        <button class="btn secondary" id="btnCloseBudgetAI">Descartar</button>
+      </div></div>`;
+    $("#btnCloseBudgetAI").onclick = () => box.classList.add("hidden");
+    $("#btnApplyBudget").onclick = async () => {
+      const clean = {};
+      Object.entries(b).forEach(([c, v]) => { if (CATS_OUT.includes(c) && +v > 0) clean[c] = +v; });
+      await setDoc(doc(db, "households", hid, "meta", "settings"), { budgets: clean }, { merge: true });
+      box.classList.add("hidden");
+      toast("✅ Limites aplicados! Veja o planejado × real.");
+    };
+  } catch (e) {
+    box.innerHTML = `<div class="ai-box" style="background:rgba(208,59,59,.1)">⚠️ ${esc(e.message)}</div>`;
+  }
+}
+
+// ============================================================
 // VIEW: CONSULTOR IA
 // ============================================================
 function viewConsultor() {
@@ -1231,6 +1433,8 @@ function financialContext() {
 - Total dívidas em aberto: ${dt.open.toFixed(0)}; parcelas atuais: ${dt.monthly.toFixed(0)}/mês
 - Limite recomendado p/ dívidas: ${(SETTINGS.debtPct ?? 30)}% da renda
 - Boletos/contas pendentes: ${pendingBills().map(b => `${b.name} ${b.amount.toFixed(0)} venc ${b.dueDate}${b.dda ? " (DDA)" : ""}${b.recurring ? " (recorrente)" : ""}`).join("; ") || "nenhum"}
+- Contas fixas mensais (recorrentes): ${fmtBRL0(fixedMonthlyTotal())}
+- Limites de orçamento definidos: ${getBudgets().map(([c, v]) => `${c} ${v.toFixed(0)}`).join(", ") || "nenhum"}
 - Total investido: ${investedTotal().toFixed(0)}
 - META: ${p.goal} em ${SETTINGS.goalYears || 5} anos. Faltam ${p.monthsLeft} meses. Aporte necessário: ${p.pmt.toFixed(0)}/mês com ${(p.rate*100).toFixed(2)}% a.m.
 - % da renda destinado a investir: ${SETTINGS.investPct ?? 20}%`;
@@ -1425,6 +1629,10 @@ function attachHandlers() {
   document.querySelectorAll("[data-del-inv]").forEach(b => b.onclick = async () => {
     if (confirm("Excluir este registro?")) await deleteDoc(doc(db, "households", hid, "investments", b.dataset.delInv));
   });
+
+  // orçamento
+  $("#btnSetBudgets") && ($("#btnSetBudgets").onclick = modalBudgets);
+  $("#btnBudgetAI") && ($("#btnBudgetAI").onclick = budgetSuggestAI);
 
   // plano
   $("#btnEditGoal") && ($("#btnEditGoal").onclick = modalGoal);
