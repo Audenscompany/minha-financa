@@ -19,8 +19,39 @@ let unsubs = [];
 let chatHistory = [];
 let receiptDraft = null;
 
-const CATS_OUT = ["Alimentação","Mercado","Moradia","Contas (água/luz/net)","Transporte","Saúde","Educação","Lazer","Assinaturas","Vestuário","Pet","Dívidas","Impostos/Taxas","Outros"];
-const CATS_IN = ["Salário/Pró-labore","Vendas","Freelance","Rendimentos","Reembolso","Outros"];
+const CATS_OUT_BASE = ["Alimentação","Mercado","Moradia","Contas (água/luz/net)","Transporte","Saúde","Educação","Lazer","Assinaturas","Vestuário","Pet","Dívidas","Impostos/Taxas","Outros"];
+const CATS_IN_BASE = ["Salário/Pró-labore","Vendas","Freelance","Rendimentos","Reembolso","Outros"];
+// categorias = base + personalizadas do usuário (guardadas em settings).
+// "Outros" sempre por último.
+function catsOut() {
+  const custom = (SETTINGS.customCatsOut || []);
+  return [...CATS_OUT_BASE.filter(c => c !== "Outros"), ...custom, "Outros"];
+}
+function catsIn() {
+  const custom = (SETTINGS.customCatsIn || []);
+  return [...CATS_IN_BASE.filter(c => c !== "Outros"), ...custom, "Outros"];
+}
+async function addCustomCat(type, name) {
+  name = (name || "").trim();
+  if (!name) return false;
+  const key = type === "entrada" ? "customCatsIn" : "customCatsOut";
+  const all = type === "entrada" ? catsIn() : catsOut();
+  if (all.some(c => c.toLowerCase() === name.toLowerCase())) { toast("Essa categoria já existe."); return false; }
+  const cur = SETTINGS[key] || [];
+  const next = [...cur, name];
+  SETTINGS[key] = next; // atualização otimista para refletir na hora
+  try {
+    await setDoc(doc(db, "households", hid, "meta", "settings"), { [key]: next }, { merge: true });
+    toast("Categoria \"" + name + "\" criada!");
+    return true;
+  } catch (e) { toast("Erro: " + e.message); return false; }
+}
+async function removeCustomCat(type, name) {
+  const key = type === "entrada" ? "customCatsIn" : "customCatsOut";
+  const next = (SETTINGS[key] || []).filter(c => c !== name);
+  await setDoc(doc(db, "households", hid, "meta", "settings"), { [key]: next }, { merge: true });
+  toast("Categoria removida.");
+}
 const METHODS = ["PIX","Cartão de crédito","Cartão de débito","Dinheiro","Boleto","Transferência"];
 const ESSENTIAL = new Set(["Mercado","Moradia","Contas (água/luz/net)","Transporte","Saúde","Educação","Impostos/Taxas"]);
 
@@ -655,7 +686,7 @@ function modalBill(b = null) {
       <div class="field"><label>Vencimento</label><input id="bDue" type="date" value="${t.dueDate || todayISO()}"></div>
     </div>
     <div class="field"><label>Categoria (para o registro da saída)</label>
-      <select id="bCat">${CATS_OUT.map(c => `<option ${(t.category || "Contas (água/luz/net)") === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
+      <select id="bCat">${catsOut().map(c => `<option ${(t.category || "Contas (água/luz/net)") === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
     <div class="field" style="flex-direction:row; align-items:center; gap:9px">
       <input type="checkbox" id="bRecurring" style="width:18px; height:18px" ${t.recurring ? "checked" : ""}>
       <label for="bRecurring" style="margin:0">🔁 Esta conta se repete todo mês</label>
@@ -1002,7 +1033,7 @@ function viewOrcamento() {
 function modalBudgets() {
   const cur = SETTINGS.budgets || {};
   const discretionary = ["Alimentação", "Lazer", "Assinaturas", "Vestuário", "Transporte", "Mercado", "Pet"];
-  const ordered = [...discretionary, ...CATS_OUT.filter(c => !discretionary.includes(c))];
+  const ordered = [...discretionary, ...catsOut().filter(c => !discretionary.includes(c))];
   openModal(`
     <h3>Definir limites de gastos</h3>
     <p class="muted" style="margin:-8px 0 14px">Defina um teto mensal por categoria. Deixe em branco (ou 0) as que não quer limitar. As de estilo de vida estão no topo.</p>
@@ -1042,7 +1073,7 @@ async function budgetSuggestAI() {
   try {
     const raw = await callClaude({
       maxTokens: 1500,
-      system: `Você é um consultor financeiro brasileiro. Com base nos dados reais do usuário, proponha limites mensais de gastos por categoria seguindo a lógica 50/30/20 e o padrão de gastos dele. Categorias válidas: ${CATS_OUT.join(", ")}. Considere que as contas fixas recorrentes já estão comprometidas. Responda APENAS com JSON válido, sem markdown:
+      system: `Você é um consultor financeiro brasileiro. Com base nos dados reais do usuário, proponha limites mensais de gastos por categoria seguindo a lógica 50/30/20 e o padrão de gastos dele. Categorias válidas: ${catsOut().join(", ")}. Considere que as contas fixas recorrentes já estão comprometidas. Responda APENAS com JSON válido, sem markdown:
 {"resumo":"2-3 frases explicando a lógica e onde ele pode cortar","budgets":{"Categoria":valor_numerico, ...}}
 Inclua no budgets só categorias de gasto variável que fazem sentido limitar (ex.: Alimentação, Lazer, Assinaturas, Mercado, Transporte, Vestuário). Valores realistas para a renda dele.`,
       messages: [{ role: "user", content: "Monte um orçamento mensal de limites por categoria para mim." }]
@@ -1063,7 +1094,7 @@ Inclua no budgets só categorias de gasto variável que fazem sentido limitar (e
     $("#btnCloseBudgetAI").onclick = () => box.classList.add("hidden");
     $("#btnApplyBudget").onclick = async () => {
       const clean = {};
-      Object.entries(b).forEach(([c, v]) => { if (CATS_OUT.includes(c) && +v > 0) clean[c] = +v; });
+      Object.entries(b).forEach(([c, v]) => { if (catsOut().includes(c) && +v > 0) clean[c] = +v; });
       await setDoc(doc(db, "households", hid, "meta", "settings"), { budgets: clean }, { merge: true });
       box.classList.add("hidden");
       toast("✅ Limites aplicados! Veja o planejado × real.");
@@ -1140,6 +1171,35 @@ function viewConfig() {
   </div>
 
   <div class="card section-gap">
+    <h3>🏷️ Categorias personalizadas</h3>
+    <p class="muted" style="margin:6px 0 12px">Crie suas próprias categorias — elas aparecem nas transações, boletos e orçamento. As padrão do sistema não podem ser removidas.</p>
+    <div class="two-col grid">
+      <div>
+        <div class="muted" style="font-weight:600; margin-bottom:6px">Saídas</div>
+        ${(SETTINGS.customCatsOut || []).length ? (SETTINGS.customCatsOut || []).map(c => `
+          <div class="flex spread" style="padding:6px 0; border-bottom:1px solid var(--grid)">
+            <span class="chip">${esc(c)}</span><button class="icon-btn" data-rm-cat-out="${esc(c)}">🗑️</button></div>`).join("")
+          : `<div class="muted" style="font-size:13px">Nenhuma personalizada ainda.</div>`}
+        <div class="flex" style="margin-top:10px">
+          <input id="newCatOut" placeholder="Ex.: Pet, Viagem, Filhos" style="flex:1; padding:9px 11px; border-radius:9px; border:1px solid var(--border); background:var(--page)">
+          <button class="btn secondary small" id="btnAddCatOut">Adicionar</button>
+        </div>
+      </div>
+      <div>
+        <div class="muted" style="font-weight:600; margin-bottom:6px">Entradas</div>
+        ${(SETTINGS.customCatsIn || []).length ? (SETTINGS.customCatsIn || []).map(c => `
+          <div class="flex spread" style="padding:6px 0; border-bottom:1px solid var(--grid)">
+            <span class="chip">${esc(c)}</span><button class="icon-btn" data-rm-cat-in="${esc(c)}">🗑️</button></div>`).join("")
+          : `<div class="muted" style="font-size:13px">Nenhuma personalizada ainda.</div>`}
+        <div class="flex" style="margin-top:10px">
+          <input id="newCatIn" placeholder="Ex.: Aluguel recebido, Bônus" style="flex:1; padding:9px 11px; border-radius:9px; border:1px solid var(--border); background:var(--page)">
+          <button class="btn secondary small" id="btnAddCatIn">Adicionar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card section-gap">
     <h3>🤖 Inteligência Artificial (Claude)</h3>
     <p class="muted" style="margin:6px 0 12px">Sua chave fica salva <b>somente neste dispositivo</b> (navegador) — nunca vai para o GitHub nem para o banco de dados. Crie a sua em <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> → API Keys.</p>
     <div class="field"><label>Chave da API (sk-ant-...)</label>
@@ -1191,7 +1251,7 @@ function modalTx(tx = null, prefill = null) {
     </div>
     <div class="field"><label>Descrição</label><input id="mDesc" value="${esc(t.desc || "")}" placeholder="Ex.: Supermercado Pão de Açúcar"></div>
     <div class="form-row">
-      <div class="field"><label>Categoria</label><select id="mCat"></select></div>
+      <div class="field"><label>Categoria <button type="button" id="mAddCat" class="link-btn" style="float:right; font-weight:600">+ nova</button></label><select id="mCat"></select></div>
       <div class="field"><label>Forma</label><select id="mMethod">${METHODS.map(m => `<option ${t.method === m ? "selected" : ""}>${m}</option>`).join("")}</select></div>
     </div>
     <div class="modal-actions">
@@ -1199,11 +1259,16 @@ function modalTx(tx = null, prefill = null) {
       <button class="btn" id="mSave">${tx ? "Salvar" : "Registrar"}</button>
     </div>`);
   let curType = type;
-  const fillCats = () => {
-    const list = curType === "entrada" ? CATS_IN : CATS_OUT;
-    $("#mCat").innerHTML = list.map(c => `<option ${t.category === c ? "selected" : ""}>${c}</option>`).join("");
+  const fillCats = (selected) => {
+    const list = curType === "entrada" ? catsIn() : catsOut();
+    const sel = selected || t.category;
+    $("#mCat").innerHTML = list.map(c => `<option ${sel === c ? "selected" : ""}>${c}</option>`).join("");
   };
   fillCats();
+  $("#mAddCat").onclick = async () => {
+    const nm = prompt(`Nome da nova categoria de ${curType === "entrada" ? "entrada" : "saída"}:`);
+    if (nm && await addCustomCat(curType, nm)) fillCats(nm.trim());
+  };
   $("#segType").querySelectorAll("button").forEach(b => b.onclick = () => {
     curType = b.dataset.t;
     $("#segType").querySelectorAll("button").forEach(x => x.className = "");
@@ -1496,7 +1561,7 @@ async function readReceipt(file) {
     const raw = await callClaude({
       maxTokens: 600,
       system: `Você extrai dados de comprovantes financeiros brasileiros (PIX, cartão, boleto, nota fiscal). Responda APENAS com JSON válido, sem markdown, no formato:
-{"valor": 123.45, "data": "YYYY-MM-DD", "descricao": "nome do estabelecimento/pessoa", "tipo": "saida" ou "entrada", "categoria": "uma de: ${CATS_OUT.join(", ")} (para saída) ou ${CATS_IN.join(", ")} (para entrada)", "forma": "uma de: ${METHODS.join(", ")}", "confianca": "alta|media|baixa"}
+{"valor": 123.45, "data": "YYYY-MM-DD", "descricao": "nome do estabelecimento/pessoa", "tipo": "saida" ou "entrada", "categoria": "uma de: ${catsOut().join(", ")} (para saída) ou ${catsIn().join(", ")} (para entrada)", "forma": "uma de: ${METHODS.join(", ")}", "confianca": "alta|media|baixa"}
 Se a imagem não for um comprovante, responda {"erro": "descreva o problema"}. Data ausente → use null. Tipo: pagamento/compra/transferência enviada = saida; recebimento = entrada.`,
       messages: [{
         role: "user",
@@ -1650,6 +1715,12 @@ function attachHandlers() {
   document.querySelectorAll("[data-del-inv]").forEach(b => b.onclick = async () => {
     if (confirm("Excluir este registro?")) await deleteDoc(doc(db, "households", hid, "investments", b.dataset.delInv));
   });
+
+  // categorias personalizadas
+  $("#btnAddCatOut") && ($("#btnAddCatOut").onclick = async () => { const v = $("#newCatOut").value; if (await addCustomCat("saida", v)) $("#newCatOut").value = ""; });
+  $("#btnAddCatIn") && ($("#btnAddCatIn").onclick = async () => { const v = $("#newCatIn").value; if (await addCustomCat("entrada", v)) $("#newCatIn").value = ""; });
+  document.querySelectorAll("[data-rm-cat-out]").forEach(b => b.onclick = () => { if (confirm("Remover a categoria \"" + b.dataset.rmCatOut + "\"?")) removeCustomCat("saida", b.dataset.rmCatOut); });
+  document.querySelectorAll("[data-rm-cat-in]").forEach(b => b.onclick = () => { if (confirm("Remover a categoria \"" + b.dataset.rmCatIn + "\"?")) removeCustomCat("entrada", b.dataset.rmCatIn); });
 
   // orçamento
   $("#btnSetBudgets") && ($("#btnSetBudgets").onclick = modalBudgets);
