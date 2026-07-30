@@ -532,6 +532,45 @@ function billTimesLabel(b) {
 function pendingBills() {
   return BILLS.filter(b => !["pago", "encerrado", "convertido"].includes(b.status));
 }
+// parcelas com vencimento em MESES ANTERIORES ao atual (a do mês corrente fica nos boletos)
+function overdueOccurrences(b) {
+  const curMK = todayISO().slice(0, 7);
+  const maxN = b.recurring ? (b.totalTimes ? Math.max(0, b.totalTimes - (b.paidTimes || 0)) : 999) : 1;
+  let d = b.dueDate, n = 0;
+  const months = [];
+  while (monthKey(d) < curMK && n < maxN) {
+    months.push(monthKey(d)); n++;
+    if (!b.recurring) break;
+    d = addMonthISO(d);
+  }
+  return { n, nextDue: d, months };
+}
+
+async function regularizeBill(b) {
+  const { n, nextDue, months } = overdueOccurrences(b);
+  if (!n) return;
+  const total = n * b.amount;
+  const remaining = b.recurring && b.totalTimes ? b.totalTimes - (b.paidTimes || 0) : Infinity;
+  const allPast = n >= remaining || !b.recurring;
+  if (!confirm(`Mover ${n} parcela(s) atrasada(s) de "${b.name}" (${months.map(monthLabel).join(", ")} — total ${fmtBRL(total)}) para o Planejamento de Dívidas?`)) return;
+  try {
+    await addDoc(collection(db, "households", hid, "debts"), {
+      name: `${b.name} — ${n} parcela(s) atrasada(s)`,
+      total, currentValue: total, paid: 0,
+      monthlyPayment: b.amount, interest: null, status: "atrasada",
+      dueDay: b.dueDate ? +b.dueDate.split("-")[2] : null,
+      note: `Parcelas vencidas de ${months.map(monthLabel).join(", ")} (${fmtBRL(b.amount)} cada), movidas dos Boletos em ${todayISO().split("-").reverse().join("/")}` + (b.dda ? " · boleto DDA" : ""),
+      updatedAt: new Date().toISOString()
+    });
+    if (allPast) {
+      await updateDoc(doc(db, "households", hid, "bills", b.id), { status: "convertido", paidTimes: (b.paidTimes || 0) + n });
+      toast(`📉 ${n} parcela(s) viraram dívida. Esta conta não tinha mais parcelas futuras.`);
+    } else {
+      await updateDoc(doc(db, "households", hid, "bills", b.id), { paidTimes: (b.paidTimes || 0) + n, dueDate: nextDue });
+      toast(`📉 ${n} parcela(s) viraram dívida. Nos Boletos ficou a parcela de ${monthLabel(monthKey(nextDue))}.`);
+    }
+  } catch (e) { toast("Erro: " + e.message); }
+}
 
 function viewBoletos() {
   const today = todayISO();
@@ -556,6 +595,21 @@ function viewBoletos() {
     <div class="card tile"><div class="label">Boletos DDA</div><div class="value">${ddaCount}</div>
       <div class="delta">registrados no seu CPF</div></div>
   </div>
+
+  ${(() => {
+    const late = pend.map(b => ({ b, o: overdueOccurrences(b) })).filter(x => x.o.n > 0);
+    if (!late.length) return "";
+    return `<div class="card section-gap" style="border-color:var(--warning)">
+      <h3>⚠️ Parcelas de meses anteriores em atraso</h3>
+      <p class="muted" style="margin:6px 0 10px">O recomendado é mover essas parcelas para o Planejamento de Dívidas e deixar nos Boletos apenas a conta do mês atual.</p>
+      ${late.map(({ b, o }) => `
+      <div class="flex spread" style="padding:9px 0; border-top:1px solid var(--grid)">
+        <span><b>${esc(b.name)}</b>
+          <div class="muted">${o.n} parcela(s) vencida(s): ${o.months.map(monthLabel).join(", ")} · total ${fmtBRL(o.n * b.amount)}</div></span>
+        <button class="btn small" data-regularize="${b.id}">📉 Mover para Dívidas</button>
+      </div>`).join("")}
+    </div>`;
+  })()}
 
   <div class="card section-gap">
     <h3>Contas pendentes</h3>
@@ -1285,6 +1339,7 @@ function attachHandlers() {
   });
   document.querySelectorAll("[data-pay-bill]").forEach(b => b.onclick = () => payBill(BILLS.find(x => x.id === b.dataset.payBill)));
   document.querySelectorAll("[data-debt-bill]").forEach(b => b.onclick = () => billToDebt(BILLS.find(x => x.id === b.dataset.debtBill)));
+  document.querySelectorAll("[data-regularize]").forEach(b => b.onclick = () => regularizeBill(BILLS.find(x => x.id === b.dataset.regularize)));
 
   // investimentos
   $("#btnAddInv") && ($("#btnAddInv").onclick = modalInvest);
