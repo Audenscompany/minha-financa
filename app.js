@@ -2381,7 +2381,43 @@ function viewConfig() {
       <input type="file" id="importFile" accept=".json,application/json" class="hidden">
     </div>
     <div id="importStatus" class="muted section-gap"></div>
+  </div>
+
+  <div class="card section-gap" style="border:1px solid var(--critical)">
+    <h3 style="color:var(--critical)">🧹 Recomeçar do zero</h3>
+    <p class="muted" style="margin:6px 0 10px">Vai começar a usar de verdade a partir de setembro? Apague as transações de teste e comece com o caixa zerado. <b>Isso apaga só as entradas e saídas</b> (inclusive as compras de cartão). Suas <b>dívidas negociadas, contas fixas, orçamento (limites) e investimentos continuam intactos.</b></p>
+    <button class="btn danger" id="btnResetTx">🧹 Zerar transações</button>
   </div>`;
+}
+
+function modalResetTx() {
+  const entradas = TX.filter(t => t.type === "entrada").length;
+  const saidas = TX.filter(t => t.type === "saida").length;
+  const total = TX.length;
+  openModal(`
+    <h3 style="color:var(--critical)">Zerar transações</h3>
+    <p style="margin:8px 0 4px">Você tem <b>${total} transação(ões)</b> hoje (${entradas} entrada(s) e ${saidas} saída(s)). Todas serão apagadas para você recomeçar com o caixa zerado.</p>
+    <div class="ai-box" style="font-size:13px; margin:10px 0">✅ <b>Continuam intactos:</b> dívidas negociadas, contas fixas/boletos, limites do orçamento, investimentos e cartões cadastrados.<br>❌ <b>Serão apagadas:</b> todas as entradas e saídas, incluindo as compras lançadas nos cartões.</div>
+    <p class="muted" style="font-size:12.5px">Essa ação não tem como desfazer. Se quiser um backup antes, feche isto e use <b>Exportar tudo (JSON)</b>.</p>
+    <label class="flex" style="gap:8px; margin:12px 0; cursor:pointer"><input type="checkbox" id="resetOk" style="width:18px;height:18px"> <span>Entendi, quero apagar as ${total} transação(ões)</span></label>
+    <div id="resetStatus" class="muted"></div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn danger" id="mReset" disabled>Zerar transações</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#resetOk").onchange = e => $("#mReset").disabled = !e.target.checked;
+  $("#mReset").onclick = async () => {
+    $("#mReset").disabled = true;
+    const st = $("#resetStatus");
+    const ids = TX.map(t => t.id);
+    let done = 0;
+    try {
+      for (const id of ids) {
+        await deleteDoc(doc(db, "households", hid, "transactions", id));
+        st.textContent = `Apagando… ${++done}/${ids.length}`;
+      }
+      closeModal();
+      toast(`🧹 ${ids.length} transação(ões) apagadas. Caixa zerado — pode começar!`);
+    } catch (e) { st.textContent = "Erro: " + e.message; $("#mReset").disabled = false; }
+  };
 }
 
 // ============================================================
@@ -3164,6 +3200,7 @@ function attachHandlers() {
       await updateDoc(doc(db, "households", hid), { members: arrayRemove(b.dataset.rmMember) });
   });
   $("#btnImport") && ($("#btnImport").onclick = () => $("#importFile").click());
+  $("#btnResetTx") && ($("#btnResetTx").onclick = modalResetTx);
   const impF = $("#importFile");
   if (impF) impF.onchange = async e => {
     const file = e.target.files[0];
