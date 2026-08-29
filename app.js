@@ -2470,7 +2470,8 @@ Responda APENAS com JSON válido, sem markdown:
 Regras:
 - Se for POSIÇÃO (saldo atual), gere UM item por ativo com type "aporte", amount = "Valor Atualizado"/valor bruto do ativo.
 - DATA: NUNCA invente data. Para renda fixa use a "Data de Emissão" da linha (formato YYYY-MM-DD). Se a linha não tiver data (ex.: ações em posição), use date = null. Para MOVIMENTAÇÕES use a data real de cada linha.
-- Se for MOVIMENTAÇÕES, mapeie cada linha: aplicação/compra=aporte, provento/rendimento de renda fixa=rendimento, dividendo/JCP/rendimento de FII=dividendo, resgate/venda=resgate.
+- Se for MOVIMENTAÇÕES, mapeie cada linha: aplicação/compra=aporte, provento/rendimento de renda fixa=rendimento, dividendo/JCP/rendimento de FII=dividendo, resgate/venda=resgate. Ignore linhas sem valor financeiro (ex.: "Compra Futuro" com valor "R$ -").
+- Se receber DOIS arquivos JUNTOS (uma POSIÇÃO + um EXTRATO DE MOVIMENTAÇÕES): gere UM item por ativo da POSIÇÃO, com amount = "Valor Atualizado" (valor de hoje), type="aporte", e date = a data da APLICAÇÃO/compra correspondente encontrada nas MOVIMENTAÇÕES, casando pelo CÓDIGO do produto (ex.: CDB826D89LQ) ou pelo TICKER (ex.: PETR4). Se não achar a data nas movimentações, date=null. Assim o patrimônio fica correto e cada ativo recebe sua data real de aporte. tipo_arquivo="posicao".
 - assetType: CDB/LCI/LCA/LC/debênture/CRI/CRA→"Renda fixa"; Tesouro Direto→"Tesouro"; FII (ticker terminando em 11)→"FIIs"; ações BR (ticker 3/4/5/6)→"Ações BR"; ETF/BDR/exterior→"Ações/ETF exterior"; cripto→"Cripto"; fundo→"Fundo".
 - name: use o nome do produto + código quando houver (ex.: "CDB Banco C6 - CDB8266ESQG"). conta: a instituição/corretora.
 - amount sempre número com ponto decimal. Ignore linhas de cabeçalho e de "Total". Se não houver investimentos, {"itens":[]}.`;
@@ -2480,12 +2481,12 @@ function modalImportInvest() {
   if (!hasAIKey()) return toast("Configure sua chave da API Claude em Configurações para importar.");
   openModal(`
     <h3>Importar extrato de investimentos</h3>
-    <p class="muted" style="margin:-8px 0 12px; font-size:13px">Envie o arquivo da B3 (Área do Investidor) ou da sua corretora — Excel, CSV, PDF ou um print. A IA lê e você confirma antes de salvar.</p>
+    <p class="muted" style="margin:-8px 0 12px; font-size:13px">Envie o arquivo da B3 ou da corretora — Excel, CSV, PDF ou print. 💡 Dica: selecione a <b>posição</b> e a <b>movimentação</b> juntas — a IA cruza os dois para ter o valor atual <b>e</b> as datas de aporte.</p>
     <div class="dropzone" id="impDrop">
-      <span class="big">📄</span><b>Arraste o extrato aqui</b><br>ou
-      <div class="flex" style="justify-content:center; margin-top:10px"><button class="btn small" id="impPick">Escolher arquivo</button></div>
-      <div class="muted" style="margin-top:8px; font-size:12px">.xlsx, .csv, .pdf, .png, .jpg</div>
-      <input type="file" id="impFile" accept=".xlsx,.xls,.csv,.txt,.pdf,image/*" class="hidden">
+      <span class="big">📄</span><b>Arraste os arquivos aqui</b><br>ou
+      <div class="flex" style="justify-content:center; margin-top:10px"><button class="btn small" id="impPick">Escolher arquivo(s)</button></div>
+      <div class="muted" style="margin-top:8px; font-size:12px">Pode selecionar posição + movimentação juntas · .xlsx, .csv, .pdf, .png, .jpg</div>
+      <input type="file" id="impFile" accept=".xlsx,.xls,.csv,.txt,.pdf,image/*" class="hidden" multiple>
     </div>
     ${(() => { const n = INVEST.filter(i => i.imported).length; return n ? `<div class="flex spread" style="margin-top:12px; font-size:13px; color:var(--ink-2)"><span>Você tem ${n} lançamento(s) já importado(s).</span><button class="link-btn" id="impClear" style="color:var(--critical)">Remover importações anteriores</button></div>` : ""; })()}
     <div id="impStatus" class="section-gap"></div>
@@ -2499,45 +2500,56 @@ function modalImportInvest() {
     catch (e) { toast("Erro: " + e.message); }
   });
   $("#impPick").onclick = () => $("#impFile").click();
-  $("#impFile").onchange = e => e.target.files[0] && importReadFile(e.target.files[0]);
+  $("#impFile").onchange = e => e.target.files.length && importReadFile([...e.target.files]);
   const dz = $("#impDrop");
   dz.ondragover = e => { e.preventDefault(); dz.classList.add("drag"); };
   dz.ondragleave = () => dz.classList.remove("drag");
-  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("drag"); e.dataTransfer.files[0] && importReadFile(e.dataTransfer.files[0]); };
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("drag"); e.dataTransfer.files.length && importReadFile([...e.dataTransfer.files]); };
 }
-async function importReadFile(file) {
+async function fileToContentBlock(file) {
+  const name = (file.name || "").toLowerCase();
+  const kind = name.includes("movimenta") ? "EXTRATO DE MOVIMENTAÇÕES" : name.includes("posic") || name.includes("posiç") ? "POSIÇÃO" : "ARQUIVO";
+  const label = { type: "text", text: `\n=== ${kind} (${file.name}) ===` };
+  if (file.type.startsWith("image/")) {
+    const { b64, mime } = await fileToB64(file);
+    return [label, { type: "image", source: { type: "base64", media_type: mime, data: b64 } }];
+  }
+  if (file.type === "application/pdf" || name.endsWith(".pdf")) {
+    const { b64 } = await fileToB64(file);
+    return [label, { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }];
+  }
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+    const txt = await xlsxToText(file);
+    return [{ type: "text", text: `${label.text}\n${txt.slice(0, 38000)}` }];
+  }
+  const txt = await fileToText(file);
+  return [{ type: "text", text: `${label.text}\n${txt.slice(0, 38000)}` }];
+}
+async function importReadFile(files) {
   const status = $("#impStatus");
-  status.innerHTML = `<div class="ai-box loading-dots">🤖 Lendo ${esc(file.name)}</div>`;
+  status.innerHTML = `<div class="ai-box loading-dots">🤖 Lendo ${files.map(f => esc(f.name)).join(", ")}</div>`;
   $("#impResult").innerHTML = "";
   try {
-    const name = (file.name || "").toLowerCase();
-    let content;
-    if (file.type.startsWith("image/")) {
-      const { b64, mime } = await fileToB64(file);
-      content = [{ type: "image", source: { type: "base64", media_type: mime, data: b64 } }, { type: "text", text: "Extraia os investimentos deste extrato." }];
-    } else if (file.type === "application/pdf" || name.endsWith(".pdf")) {
-      const { b64 } = await fileToB64(file);
-      content = [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }, { type: "text", text: "Extraia os investimentos deste extrato." }];
-    } else if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
-      const txt = await xlsxToText(file);
-      content = [{ type: "text", text: "Extraia os investimentos desta planilha:\n\n" + txt.slice(0, 40000) }];
-    } else {
-      const txt = await fileToText(file);
-      content = [{ type: "text", text: "Extraia os investimentos deste extrato:\n\n" + txt.slice(0, 40000) }];
-    }
-    const raw = await callClaude({ maxTokens: 3000, system: IMPORT_SYS, messages: [{ role: "user", content }] });
+    const blocks = (await Promise.all(files.map(fileToContentBlock))).flat();
+    const content = [
+      { type: "text", text: files.length > 1 ? "Cruze a POSIÇÃO com as MOVIMENTAÇÕES: um item por ativo da posição, valor atual e data de aporte casada pelo código/ticker." : "Extraia os investimentos deste extrato." },
+      ...blocks
+    ];
+    const raw = await callClaude({ maxTokens: 3500, system: IMPORT_SYS, messages: [{ role: "user", content }] });
     const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
     importDraft = (json.itens || []).filter(i => +i.amount > 0);
     if (!importDraft.length) throw new Error("Nenhum investimento encontrado no arquivo. Tente outro export (posição ou movimentações).");
     // data de referência: da posição usar a do arquivo (posicaoYYYYMMDD) ou hoje
-    const m = (file.name || "").match(/(20\d{2})(\d{2})(\d{2})/);
+    const posName = (files.find(f => (f.name || "").toLowerCase().includes("posic")) || files[0]).name || "";
+    const m = posName.match(/(20\d{2})(\d{2})(\d{2})/);
     const refDate = m ? `${m[1]}-${m[2]}-${m[3]}` : todayISO();
+    const merged = files.length > 1;
     const isPos = json.tipo_arquivo === "posicao";
-    status.innerHTML = `<div class="ai-box">✅ ${importDraft.length} ativo(s) encontrado(s) ${isPos ? "(posição atual)" : "(movimentações)"} — confira e marque os que quer importar.</div>`;
+    status.innerHTML = `<div class="ai-box">✅ ${importDraft.length} ativo(s) encontrado(s) ${merged ? "(posição + datas de aporte cruzadas)" : isPos ? "(posição atual)" : "(movimentações)"} — confira e marque os que quer importar.</div>`;
     $("#impResult").innerHTML = `
       <div class="flex spread" style="gap:10px; margin-top:12px; padding:11px 13px; border:1px solid var(--border); border-radius:10px; flex-wrap:wrap">
         <label style="display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--ink-2)">
-          <input type="checkbox" id="impUseRef" ${isPos ? "checked" : ""} style="width:16px;height:16px"> Usar esta data para todos:</label>
+          <input type="checkbox" id="impUseRef" ${(isPos && !merged) ? "checked" : ""} style="width:16px;height:16px"> ${merged ? "Sobrescrever com uma data única:" : "Usar esta data para todos:"}</label>
         <input type="date" id="impRefDate" value="${refDate}" style="padding:7px 10px; border-radius:8px; border:1px solid var(--border); background:var(--page)">
       </div>
       <div style="max-height:34vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-top:10px">
