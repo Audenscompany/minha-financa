@@ -1292,7 +1292,10 @@ function viewInvest() {
   return `
   <div class="view-head">
     <div><h2>Investimentos</h2><div class="sub">Registre aportes e acompanhe seu patrimônio</div></div>
-    <button class="btn" id="btnAddInv"><span class="ico" data-ic="plus" style="width:15px;height:15px"></span> Novo aporte</button>
+    <div class="flex">
+      <button class="btn secondary" id="btnImportInv"><span class="ico" data-ic="file" style="width:15px;height:15px"></span> Importar extrato</button>
+      <button class="btn" id="btnAddInv"><span class="ico" data-ic="plus" style="width:15px;height:15px"></span> Novo aporte</button>
+    </div>
   </div>
 
   <div class="inv-kpi">
@@ -2439,6 +2442,116 @@ function fileToB64(file) {
     r.readAsDataURL(file);
   });
 }
+function fileToText(file) {
+  return new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsText(file); });
+}
+let _xlsx = null;
+function loadXLSX() {
+  if (_xlsx) return Promise.resolve(_xlsx);
+  if (window.XLSX) { _xlsx = window.XLSX; return Promise.resolve(_xlsx); }
+  return new Promise((ok, bad) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = () => { _xlsx = window.XLSX; ok(_xlsx); };
+    s.onerror = () => bad(new Error("Não foi possível carregar o leitor de planilha."));
+    document.head.appendChild(s);
+  });
+}
+async function xlsxToText(file) {
+  const XLSX = await loadXLSX();
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  return wb.SheetNames.map(n => `# Planilha: ${n}\n` + XLSX.utils.sheet_to_csv(wb.Sheets[n])).join("\n\n");
+}
+
+const IMPORT_SYS = `Você extrai investimentos de extratos/posições de corretoras e da B3 (Área do Investidor). A entrada pode ser uma POSIÇÃO (saldo atual de cada ativo) ou um EXTRATO DE MOVIMENTAÇÕES.
+Responda APENAS com JSON válido, sem markdown:
+{"tipo_arquivo":"posicao|movimentacoes","itens":[{"name":"nome do ativo","assetType":"uma de: Renda fixa, Tesouro, FIIs, Ações BR, Ações/ETF exterior, Cripto, Fundo, Outros","type":"aporte|rendimento|dividendo|resgate","amount":1234.56,"date":"YYYY-MM-DD","conta":"corretora/instituição"}],"resumo":"1 frase"}
+Regras:
+- Se for POSIÇÃO (saldo atual), gere UM item por ativo com type "aporte", amount = valor atual/bruto do ativo, date = hoje.
+- Se for MOVIMENTAÇÕES, mapeie cada linha: aplicação/compra=aporte, provento/rendimento de renda fixa=rendimento, dividendo/JCP/rendimento de FII=dividendo, resgate/venda=resgate.
+- assetType: CDB/LCI/LCA/LC/debênture/CRI/CRA→"Renda fixa"; Tesouro Direto→"Tesouro"; FII (ticker terminando em 11)→"FIIs"; ações BR (ticker 3/4/5/6)→"Ações BR"; ETF/BDR/exterior→"Ações/ETF exterior"; cripto→"Cripto"; fundo→"Fundo".
+- amount sempre número com ponto decimal. Ignore linhas de cabeçalho/total. Se não houver investimentos, {"itens":[]}.`;
+
+let importDraft = [];
+function modalImportInvest() {
+  if (!hasAIKey()) return toast("Configure sua chave da API Claude em Configurações para importar.");
+  openModal(`
+    <h3>Importar extrato de investimentos</h3>
+    <p class="muted" style="margin:-8px 0 12px; font-size:13px">Envie o arquivo da B3 (Área do Investidor) ou da sua corretora — Excel, CSV, PDF ou um print. A IA lê e você confirma antes de salvar.</p>
+    <div class="dropzone" id="impDrop">
+      <span class="big">📄</span><b>Arraste o extrato aqui</b><br>ou
+      <div class="flex" style="justify-content:center; margin-top:10px"><button class="btn small" id="impPick">Escolher arquivo</button></div>
+      <div class="muted" style="margin-top:8px; font-size:12px">.xlsx, .csv, .pdf, .png, .jpg</div>
+      <input type="file" id="impFile" accept=".xlsx,.xls,.csv,.txt,.pdf,image/*" class="hidden">
+    </div>
+    <div id="impStatus" class="section-gap"></div>
+    <div id="impResult"></div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#impPick").onclick = () => $("#impFile").click();
+  $("#impFile").onchange = e => e.target.files[0] && importReadFile(e.target.files[0]);
+  const dz = $("#impDrop");
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add("drag"); };
+  dz.ondragleave = () => dz.classList.remove("drag");
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("drag"); e.dataTransfer.files[0] && importReadFile(e.dataTransfer.files[0]); };
+}
+async function importReadFile(file) {
+  const status = $("#impStatus");
+  status.innerHTML = `<div class="ai-box loading-dots">🤖 Lendo ${esc(file.name)}</div>`;
+  $("#impResult").innerHTML = "";
+  try {
+    const name = (file.name || "").toLowerCase();
+    let content;
+    if (file.type.startsWith("image/")) {
+      const { b64, mime } = await fileToB64(file);
+      content = [{ type: "image", source: { type: "base64", media_type: mime, data: b64 } }, { type: "text", text: "Extraia os investimentos deste extrato." }];
+    } else if (file.type === "application/pdf" || name.endsWith(".pdf")) {
+      const { b64 } = await fileToB64(file);
+      content = [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }, { type: "text", text: "Extraia os investimentos deste extrato." }];
+    } else if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+      const txt = await xlsxToText(file);
+      content = [{ type: "text", text: "Extraia os investimentos desta planilha:\n\n" + txt.slice(0, 40000) }];
+    } else {
+      const txt = await fileToText(file);
+      content = [{ type: "text", text: "Extraia os investimentos deste extrato:\n\n" + txt.slice(0, 40000) }];
+    }
+    const raw = await callClaude({ maxTokens: 3000, system: IMPORT_SYS, messages: [{ role: "user", content }] });
+    const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    importDraft = (json.itens || []).filter(i => +i.amount > 0);
+    if (!importDraft.length) throw new Error("Nenhum investimento encontrado no arquivo. Tente outro export (posição ou movimentações).");
+    status.innerHTML = `<div class="ai-box">✅ ${importDraft.length} ativo(s) encontrado(s) ${json.tipo_arquivo === "posicao" ? "(posição atual)" : "(movimentações)"} — confira e marque os que quer importar.</div>`;
+    $("#impResult").innerHTML = `
+      <div style="max-height:38vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-top:10px">
+        ${importDraft.map((i, idx) => `
+        <label style="display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid var(--border); border-radius:10px; cursor:pointer">
+          <input type="checkbox" class="imp-chk" data-i="${idx}" checked style="width:17px; height:17px">
+          <span style="flex:1; min-width:0"><b>${esc(i.name)}</b>
+            <div class="muted" style="font-size:12px">${esc(i.assetType || "Outros")} · ${({aporte:"Aporte",rendimento:"Rendimento",dividendo:"Dividendo",resgate:"Resgate"})[i.type] || "Aporte"} · ${i.date || "sem data"}${i.conta ? " · " + esc(i.conta) : ""}</div></span>
+          <b style="font-variant-numeric:tabular-nums; white-space:nowrap">${fmtBRL(+i.amount)}</b>
+        </label>`).join("")}
+      </div>
+      <button class="btn" id="impConfirm" style="width:100%; justify-content:center; margin-top:12px">✅ Importar selecionados</button>`;
+    $("#impConfirm").onclick = async () => {
+      const chosen = [...document.querySelectorAll(".imp-chk:checked")].map(c => importDraft[+c.dataset.i]);
+      if (!chosen.length) return toast("Marque ao menos um ativo.");
+      $("#impConfirm").disabled = true; $("#impConfirm").textContent = "Importando…";
+      try {
+        for (const i of chosen) {
+          await addDoc(collection(db, "households", hid, "investments"), {
+            name: String(i.name || "Ativo"), assetType: i.assetType || "Outros",
+            type: ["aporte", "rendimento", "dividendo", "resgate"].includes(i.type) ? i.type : "aporte",
+            amount: +i.amount || 0, date: i.date || todayISO(),
+            conta: i.conta || "Importado", createdBy: user.email, imported: true
+          });
+        }
+        closeModal(); toast(`📥 ${chosen.length} investimento(s) importado(s)!`);
+      } catch (e) { toast("Erro: " + e.message); $("#impConfirm").disabled = false; }
+    };
+  } catch (e) {
+    status.innerHTML = `<div class="ai-box" style="background:rgba(208,59,59,.1)">⚠️ ${esc(e.message)}</div>`;
+  }
+}
 
 // ---- IA: estratégia de dívidas ----
 async function debtStrategy() {
@@ -2548,6 +2661,7 @@ function attachHandlers() {
   // investimentos
   $("#btnAddInv") && ($("#btnAddInv").onclick = modalInvest);
   $("#btnAddInv2") && ($("#btnAddInv2").onclick = modalInvest);
+  $("#btnImportInv") && ($("#btnImportInv").onclick = modalImportInvest);
   $("#btnInvestAI") && ($("#btnInvestAI").onclick = investAnaliseIA);
   document.querySelectorAll("[data-del-inv]").forEach(b => b.onclick = async () => {
     if (confirm("Excluir este registro?")) await deleteDoc(doc(db, "households", hid, "investments", b.dataset.delInv));
