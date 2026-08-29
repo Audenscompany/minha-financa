@@ -70,6 +70,40 @@ const monthLabel = mk => { const [y,m] = mk.split("-"); return ["jan","fev","mar
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const $ = sel => document.querySelector(sel);
 
+// ---------- Ícones (SVG inline, família única, currentColor) ----------
+const ICONS = {
+  wallet: '<path d="M3 7h15a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h11"/><path d="M16 12h.01"/>',
+  home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/><path d="M9 20v-6h6v6"/>',
+  heart: '<path d="M20.8 6.6a5 5 0 0 0-7.1 0L12 8.3l-1.7-1.7a5 5 0 1 0-7.1 7.1L12 21l8.8-7.3a5 5 0 0 0 0-7.1Z"/>',
+  list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
+  file: '<path d="M14 3v5h5"/><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M9 13h6M9 17h4"/>',
+  camera: '<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.2"/>',
+  pie: '<path d="M12 3a9 9 0 1 0 9 9h-9Z"/><path d="M14 3.5A9 9 0 0 1 20.5 10H14Z"/>',
+  'trend-down': '<path d="M3 7l6 6 4-4 8 8"/><path d="M21 17v-4h-4"/>',
+  'trend-up': '<path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v4h-4"/>',
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/>',
+  sparkles: '<path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8Z"/><path d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9Z"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  layers: '<path d="M12 3l9 5-9 5-9-5 9-5Z"/><path d="M3 13l9 5 9-5"/>',
+  more: '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+  coins: '<ellipse cx="9" cy="7" rx="6" ry="3"/><path d="M3 7v5c0 1.7 2.7 3 6 3s6-1.3 6-3V7"/><path d="M15 12.5c2.8-.2 6-1.4 6-3.5"/><path d="M21 9v5c0 1.7-2.7 3-6 3-1 0-2-.1-2.8-.3"/>',
+  lightbulb: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.3 1 2.5h6c0-1.2.3-1.8 1-2.5A6 6 0 0 0 12 3Z"/>',
+  activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  shield: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6Z"/><path d="M9 12l2 2 4-4"/>',
+};
+function icon(name, size) {
+  const s = size ? ` style="width:${size}px;height:${size}px"` : "";
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"${s}>${ICONS[name] || ""}</svg>`;
+}
+function fillIcons(root) {
+  (root || document).querySelectorAll("[data-ic]").forEach(el => {
+    if (el.dataset.done) return;
+    el.innerHTML = icon(el.dataset.ic);
+    el.dataset.done = "1";
+  });
+}
+
 function parseMoney(str) {
   if (typeof str === "number") return str;
   if (!str) return 0;
@@ -134,6 +168,8 @@ async function enterApp() {
   $("#btnLogout").onclick = () => signOut(auth);
   $("#btnTheme").onclick = toggleTheme;
   document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => switchView(b.dataset.view));
+  document.querySelectorAll("[data-action]").forEach(b => b.onclick = () => navAction(b.dataset.action));
+  fillIcons(); // ícones estáticos da navegação
 
   const savedTheme = localStorage.getItem("mf_theme");
   if (savedTheme) document.documentElement.dataset.theme = savedTheme;
@@ -245,17 +281,80 @@ function planCalc() {
   return { goal, current, pct, pmt, monthsLeft, monthsTotal, rate, end };
 }
 
+// ---------- Score de saúde financeira (transparente, item 35) ----------
+function avgSavingsRate() {
+  const mks = lastMonths(3);
+  const rates = mks.map(mk => { const t = monthTotals(mk); return t.ins > 0 ? (t.ins - t.outs) / t.ins : null; }).filter(r => r != null);
+  return rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+}
+function financialScore() {
+  const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+  const parts = [];
+  // 1) Economia (25) — média de 3 meses vs meta
+  const goalPct = (SETTINGS.savingsGoalPct ?? 30) / 100;
+  const sr = avgSavingsRate();
+  if (sr == null) parts.push({ key: "economia", label: "Economia", max: 25, score: 0, na: true, detail: "sem histórico de receita" });
+  else { const s = clamp(sr / goalPct) * 25; parts.push({ key: "economia", label: "Economia", max: 25, score: s, detail: `guarda ${(sr*100).toFixed(0)}% da renda (meta ${(goalPct*100).toFixed(0)}%)` }); }
+  // 2) Controle de orçamento (20)
+  const mk = todayISO().slice(0, 7), spent = Object.fromEntries(catSpend(mk)), budgets = getBudgets();
+  if (!budgets.length) parts.push({ key: "orcamento", label: "Controle de gastos", max: 20, score: 12, detail: "defina limites p/ avaliar", soft: true });
+  else { const dentro = budgets.filter(([c, l]) => (spent[c] || 0) <= l).length; const s = dentro / budgets.length * 20; parts.push({ key: "orcamento", label: "Controle de gastos", max: 20, score: s, detail: `${dentro}/${budgets.length} categorias dentro do limite` }); }
+  // 3) Dívidas (20) — comprometimento da renda
+  const renda = avgIncome(), dt = debtTotals();
+  const ratio = renda > 0 ? dt.monthly / renda : 0;
+  const s3 = dt.monthly === 0 ? 20 : clamp(1 - ratio / 0.4) * 20;
+  parts.push({ key: "dividas", label: "Dívidas sob controle", max: 20, score: s3, detail: dt.monthly === 0 ? "sem parcelas mensais" : `${(ratio*100).toFixed(0)}% da renda em parcelas` });
+  // 4) Investimentos (20) — aporte do mês vs plano
+  const plan = planCalc(), invMes = investedInMonths([mk]);
+  const s4 = plan.pmt > 0 ? clamp(invMes / plan.pmt) * 20 : (investedTotal() > 0 ? 16 : 0);
+  parts.push({ key: "invest", label: "Investindo", max: 20, score: s4, detail: plan.pmt > 0 ? `${fmtBRL0(invMes)} de ${fmtBRL0(plan.pmt)} no mês` : (investedTotal() > 0 ? "carteira iniciada" : "nenhum aporte ainda") });
+  // 5) Contas em dia (15)
+  const overdue = pendingBills().filter(b => b.dueDate && b.dueDate < todayISO()).length;
+  const s5 = overdue === 0 ? 15 : clamp(1 - overdue / 3) * 15;
+  parts.push({ key: "contas", label: "Contas em dia", max: 15, score: s5, detail: overdue === 0 ? "nada vencido" : `${overdue} conta(s) vencida(s)` });
+  const total = Math.round(parts.reduce((a, p) => a + p.score, 0));
+  const band = total >= 80 ? { lbl: "Excelente", cls: "good" } : total >= 60 ? { lbl: "Boa", cls: "good" } : total >= 40 ? { lbl: "Atenção", cls: "warn" } : { lbl: "Crítica", cls: "crit" };
+  parts.forEach(p => { const r = p.score / p.max; p.level = p.na ? "flat" : r >= 0.7 ? "good" : r >= 0.4 ? "warn" : "crit"; });
+  return { total, band, parts };
+}
+function scoreColor(band) { return band.cls === "good" ? "var(--good-text)" : band.cls === "warn" ? "var(--warning)" : "var(--critical)"; }
+
+// ---------- Insights automáticos (dirigidos a dados) ----------
+function generateInsights() {
+  const out = [];
+  const mk = todayISO().slice(0, 7), prevMk = lastMonths(2)[0];
+  const cur = monthTotals(mk), prev = monthTotals(prevMk);
+  // categoria acima da média dos últimos 3 meses
+  const cats = catSpend(mk);
+  for (const [c, v] of cats.slice(0, 6)) {
+    const mks3 = lastMonths(4).slice(0, 3);
+    const hist = mks3.map(m => { let s = 0; for (const t of TX) if (t.type === "saida" && monthKey(t.date) === m && t.category === c) s += t.amount; return s; }).filter(x => x > 0);
+    if (hist.length >= 2) { const avg = hist.reduce((a, b) => a + b, 0) / hist.length; if (v > avg * 1.15) { out.push({ icon: "trend-up", title: `${c} acima da média`, detail: `${fmtBRL0(v)} neste mês — ${((v/avg-1)*100).toFixed(0)}% acima da média dos últimos meses`, goto: "transacoes" }); break; } }
+  }
+  // taxa de economia
+  const sr = cur.ins > 0 ? (cur.ins - cur.outs) / cur.ins * 100 : null;
+  const goalPct = SETTINGS.savingsGoalPct ?? 30;
+  if (sr != null) { if (sr >= goalPct) out.push({ icon: "shield", title: "Economia no alvo", detail: `Você guardou ${sr.toFixed(0)}% da renda este mês (meta ${goalPct}%)`, goto: "orcamento" }); else if (sr < 10) out.push({ icon: "activity", title: "Economia baixa", detail: `Só ${sr.toFixed(0)}% da renda sobrou este mês — revise os maiores gastos`, goto: "orcamento" }); }
+  // dívida cara
+  const caras = DEBTS.filter(d => d.status !== "quitada" && (d.interest || 0) >= 8).sort((a, b) => (b.interest||0) - (a.interest||0));
+  if (caras.length) out.push({ icon: "trend-down", title: "Dívida cara para priorizar", detail: `${caras[0].name}: ${caras[0].interest}% a.m. — quitar isso rende mais que investir`, goto: "dividas" });
+  // gastos caíram
+  if (prev.outs > 0 && cur.outs < prev.outs * 0.9 && new Date().getDate() >= 20) out.push({ icon: "shield", title: "Gastos em queda", detail: `Despesas ${((1-cur.outs/prev.outs)*100).toFixed(0)}% menores que ${monthLabel(prevMk)}. Continue assim!`, goto: "dashboard" });
+  return out.slice(0, 4);
+}
+
 // ---------- Render principal ----------
 function render() {
   const el = $("#mainContent");
   if (!el) return;
   const views = {
-    dashboard: viewDashboard, transacoes: viewTransacoes, comprovante: viewComprovante,
+    dashboard: viewDashboard, saude: viewSaude, transacoes: viewTransacoes, comprovante: viewComprovante,
     dividas: viewDividas, boletos: viewBoletos, orcamento: viewOrcamento, investimentos: viewInvest,
     plano: viewPlano, consultor: viewConsultor, config: viewConfig
   };
   el.innerHTML = (views[currentView] || viewDashboard)();
   attachHandlers();
+  fillIcons(el);
 }
 
 // ============================================================
@@ -397,6 +496,8 @@ function viewDashboard() {
     <div class="alerts">${alerts.map(alertHTML).join("")}</div>
   </div>` : ""}
 
+  ${dashScoreCard()}
+
   <!-- CAMADA 2: tendência -->
   <div class="grid two-col section-gap">
     <div class="card chart-card">
@@ -436,6 +537,26 @@ function viewDashboard() {
     <div class="flex spread"><h3>Últimas transações</h3>
       <button class="btn secondary small" data-goto="transacoes">Ver extrato →</button></div>
     ${tableTx(TX.slice(0, 6), false)}
+  </div>`;
+}
+
+function dashScoreCard() {
+  const sc = financialScore();
+  const col = scoreColor(sc.band);
+  const ins = generateInsights()[0];
+  return `<div class="card section-gap">
+    <div class="gauge-wrap">
+      ${gaugeSVG(sc.total, sc.band)}
+      <div class="score-bars">
+        <div class="flex spread" style="margin-bottom:6px">
+          <div><h3 style="display:inline">Saúde financeira</h3> <span class="pill" style="background:${col}22; color:${col}; margin-left:6px">${sc.band.lbl}</span></div>
+          <button class="btn secondary small" data-goto="saude">Ver detalhes →</button>
+        </div>
+        ${ins ? `<div class="insight" style="border:none; padding:6px 0; background:none"><span class="i-ic">${icon(ins.icon)}</span>
+          <div class="i-body"><div class="i-t"><b>${esc(ins.title)}</b></div><div class="i-d">${esc(ins.detail)}</div></div></div>`
+          : `<div class="muted">Registre transações para gerar insights.</div>`}
+      </div>
+    </div>
   </div>`;
 }
 
@@ -634,8 +755,8 @@ function tableTx(rows, actions) {
         <td>${esc(t.desc || "—")}${t.aiRead ? ' <span title="Lido por IA">🤖</span>' : ""}</td>
         <td><span class="chip">${esc(t.category)}</span></td>
         <td class="num" style="color:${t.type === "entrada" ? "var(--good-text)" : "var(--critical)"}">
-          ${t.type === "entrada" ? "+" : "−"} ${fmtBRL(t.amount)}</td>
-        ${actions ? `<td style="white-space:nowrap"><button class="icon-btn" data-edit-tx="${t.id}">✏️</button><button class="icon-btn" data-del-tx="${t.id}">🗑️</button></td>` : ""}
+          ${t.type === "entrada" ? "↑ +" : "↓ −"} ${fmtBRL(t.amount)}</td>
+        ${actions ? `<td style="white-space:nowrap"><button class="icon-btn" title="Duplicar" data-dup-tx="${t.id}">⧉</button><button class="icon-btn" title="Editar" data-edit-tx="${t.id}">✏️</button><button class="icon-btn" title="Excluir" data-del-tx="${t.id}">🗑️</button></td>` : ""}
       </tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -1299,6 +1420,79 @@ Inclua no budgets só categorias de gasto variável que fazem sentido limitar (e
 }
 
 // ============================================================
+// VIEW: SAÚDE FINANCEIRA (score + insights)
+// ============================================================
+function gaugeSVG(total, band) {
+  const r = 56, c = 2 * Math.PI * r, off = c * (1 - total / 100), col = scoreColor(band);
+  return `<div class="gauge"><svg viewBox="0 0 132 132" width="132" height="132">
+    <circle cx="66" cy="66" r="${r}" fill="none" stroke="var(--grid)" stroke-width="11"/>
+    <circle cx="66" cy="66" r="${r}" fill="none" stroke="${col}" stroke-width="11" stroke-linecap="round"
+      stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 66 66)"/>
+  </svg><div class="g-num"><b style="color:${col}">${total}</b><span>de 100</span></div></div>`;
+}
+function scoreBreakdownHTML(sc) {
+  return sc.parts.map(p => {
+    const pct = Math.max(2, p.score / p.max * 100);
+    const col = p.level === "good" ? "var(--good)" : p.level === "warn" ? "var(--warning)" : p.level === "crit" ? "var(--critical)" : "var(--accent)";
+    return `<div class="sb-row">
+      <div class="flex spread"><span><b>${esc(p.label)}</b> <span class="muted">· ${esc(p.detail)}</span></span>
+        <b style="font-variant-numeric:tabular-nums">${Math.round(p.score)}/${p.max}</b></div>
+      <div class="meter"><div style="width:${pct.toFixed(0)}%; background:${col}"></div></div>
+    </div>`;
+  }).join("");
+}
+function viewSaude() {
+  const sc = financialScore();
+  const insights = generateInsights();
+  const col = scoreColor(sc.band);
+  return `
+  <div class="view-head">
+    <div><h2>Saúde financeira</h2><div class="sub">Uma nota de 0 a 100 — e exatamente de onde ela vem</div></div>
+    <button class="btn" id="btnScoreAI" ${hasAIKey() ? "" : "disabled"}><span class="ico" data-ic="sparkles" style="width:16px;height:16px"></span> Analisar com IA</button>
+  </div>
+
+  <div class="card">
+    <div class="gauge-wrap">
+      ${gaugeSVG(sc.total, sc.band)}
+      <div class="score-bars">
+        <div class="flex" style="gap:10px; margin-bottom:4px"><span class="pill" style="background:${col}22; color:${col}">${sc.band.lbl}</span>
+          <span class="muted">${sc.total >= 80 ? "Você está no caminho certo." : sc.total >= 60 ? "Bom, com pontos a melhorar." : sc.total >= 40 ? "Precisa de ajustes." : "Requer atenção imediata."}</span></div>
+        ${scoreBreakdownHTML(sc)}
+      </div>
+    </div>
+    <p class="muted" style="margin-top:14px; font-size:12.5px">Cálculo transparente: Economia (25) + Controle de gastos (20) + Dívidas sob controle (20) + Investindo (20) + Contas em dia (15). Cada barra mostra sua nota e o motivo.</p>
+    <div id="scoreAIBox" class="section-gap hidden"></div>
+  </div>
+
+  <div class="card section-gap">
+    <h3>Insights</h3>
+    <div class="chart-sub">O que os seus números estão dizendo agora</div>
+    ${insights.length ? `<div style="display:flex; flex-direction:column; gap:10px; margin-top:12px">
+      ${insights.map(i => `<div class="insight">
+        <span class="i-ic">${icon(i.icon)}</span>
+        <div class="i-body"><div class="i-t"><b>${esc(i.title)}</b></div><div class="i-d">${esc(i.detail)}</div></div>
+        ${i.goto ? `<button class="btn secondary small" data-goto="${i.goto}" style="align-self:center">Ver</button>` : ""}
+      </div>`).join("")}</div>`
+      : `<div class="empty"><span class="big">🌱</span>Registre mais transações para gerar insights.</div>`}
+  </div>`;
+}
+async function scoreAnaliseIA() {
+  const box = $("#scoreAIBox");
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="ai-box loading-dots">Analisando sua saúde financeira</div>`;
+  const sc = financialScore();
+  const resumo = sc.parts.map(p => `${p.label}: ${Math.round(p.score)}/${p.max} (${p.detail})`).join("; ");
+  try {
+    const reply = await callClaude({
+      maxTokens: 1200,
+      system: SYSTEM_ADVISOR + "\n\n" + financialContext(),
+      messages: [{ role: "user", content: `Meu score de saúde financeira é ${sc.total}/100 (${sc.band.lbl}). Composição: ${resumo}. Em texto curto: quais 2-3 ações concretas mais elevam meu score no próximo mês, na ordem de impacto? Seja específico com valores.` }]
+    });
+    box.innerHTML = `<div class="ai-box">${esc(reply)}</div>`;
+  } catch (e) { box.innerHTML = `<div class="ai-box" style="background:rgba(208,59,59,.1)">⚠️ ${esc(e.message)}</div>`; }
+}
+
+// ============================================================
 // VIEW: CONSULTOR IA
 // ============================================================
 function viewConsultor() {
@@ -1431,10 +1625,51 @@ function viewConfig() {
 // MODAIS (transação, dívida, investimento, meta)
 // ============================================================
 function openModal(html) {
+  $("#modalBack").classList.remove("as-sheet");
   $("#modalBox").innerHTML = html;
   $("#modalBack").classList.remove("hidden");
+  fillIcons($("#modalBox"));
 }
-function closeModal() { $("#modalBack").classList.add("hidden"); }
+function closeModal() { $("#modalBack").classList.add("hidden"); $("#modalBack").classList.remove("as-sheet"); }
+
+// ---------- Action sheet (bottom sheet no mobile) ----------
+function openSheet(title, items) {
+  $("#modalBox").innerHTML = `
+    <h3 style="margin-bottom:14px">${esc(title)}</h3>
+    <div class="sheet-list">
+      ${items.map((it, i) => `<button class="sheet-item ${it.tone || ""}" data-sheet-i="${i}">
+        <span class="s-ic">${icon(it.icon)}</span>
+        <span class="s-tx"><b>${esc(it.label)}</b>${it.desc ? `<span>${esc(it.desc)}</span>` : ""}</span>
+      </button>`).join("")}
+    </div>
+    <div class="modal-actions" style="margin-top:8px"><button class="btn secondary" id="sheetCancel">Cancelar</button></div>`;
+  $("#modalBack").classList.add("as-sheet");
+  $("#modalBack").classList.remove("hidden");
+  $("#sheetCancel").onclick = closeModal;
+  items.forEach((it, i) => { const b = $(`[data-sheet-i="${i}"]`); if (b) b.onclick = () => { closeModal(); it.onClick(); }; });
+}
+function navAction(action) {
+  if (action === "lancar") return openSheet("O que você quer lançar?", [
+    { icon: "trend-down", tone: "out", label: "Despesa", desc: "Um gasto que você fez", onClick: () => modalTx(null, { type: "saida" }) },
+    { icon: "trend-up", tone: "in", label: "Receita", desc: "Um dinheiro que entrou", onClick: () => modalTx(null, { type: "entrada" }) },
+    { icon: "camera", label: "Ler comprovante", desc: "IA registra por foto", onClick: () => switchView("comprovante") },
+    { icon: "file", label: "Conta / boleto", desc: "A pagar, com vencimento", onClick: () => modalBill() },
+    { icon: "coins", label: "Investimento", desc: "Aporte ou resgate", onClick: () => modalInvest() },
+  ]);
+  if (action === "planejar") return openSheet("Planejamento", [
+    { icon: "pie", label: "Orçamento", desc: "Limites e gastos do mês", onClick: () => switchView("orcamento") },
+    { icon: "trend-down", label: "Dívidas", desc: "Negociar e quitar", onClick: () => switchView("dividas") },
+    { icon: "trend-up", label: "Investimentos", desc: "Sua carteira", onClick: () => switchView("investimentos") },
+    { icon: "target", label: "Meta 5 anos", desc: "Rumo ao milhão", onClick: () => switchView("plano") },
+    { icon: "heart", label: "Saúde financeira", desc: "Seu score", onClick: () => switchView("saude") },
+  ]);
+  if (action === "mais") return openSheet("Mais", [
+    { icon: "file", label: "Contas & Boletos", onClick: () => switchView("boletos") },
+    { icon: "camera", label: "Ler comprovante", onClick: () => switchView("comprovante") },
+    { icon: "sparkles", label: "Consultor IA", onClick: () => switchView("consultor") },
+    { icon: "settings", label: "Configurações", onClick: () => switchView("config") },
+  ]);
+}
 
 function modalTx(tx = null, prefill = null) {
   const t = tx || prefill || {};
@@ -1864,6 +2099,10 @@ function attachHandlers() {
   const fMonth = $("#fMonth");
   if (fMonth) fMonth.onchange = () => { $("#txTableBox").innerHTML = txTableFiltered(fMonth.value); attachHandlers(); };
   document.querySelectorAll("[data-edit-tx]").forEach(b => b.onclick = () => modalTx(TX.find(t => t.id === b.dataset.editTx)));
+  document.querySelectorAll("[data-dup-tx]").forEach(b => b.onclick = () => {
+    const t = TX.find(x => x.id === b.dataset.dupTx); if (!t) return;
+    modalTx(null, { type: t.type, amount: t.amount, desc: t.desc, category: t.category, method: t.method, date: todayISO() });
+  });
   document.querySelectorAll("[data-del-tx]").forEach(b => b.onclick = async () => {
     if (confirm("Excluir esta transação?")) await deleteDoc(doc(db, "households", hid, "transactions", b.dataset.delTx));
   });
@@ -1933,6 +2172,9 @@ function attachHandlers() {
   // plano
   $("#btnEditGoal") && ($("#btnEditGoal").onclick = modalGoal);
   $("#btnPlanAI") && ($("#btnPlanAI").onclick = planAI);
+
+  // saúde financeira
+  $("#btnScoreAI") && ($("#btnScoreAI").onclick = scoreAnaliseIA);
 
   // consultor
   const send = $("#btnSend");

@@ -187,6 +187,50 @@ main{flex:1; padding:26px 30px 90px; max-width:1120px; margin:0 auto; width:100%
 .cat-row:hover .meter>div{filter:brightness(1.08);}
 .cat-row:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:6px;}
 
+/* ===== Ícones & navegação agrupada (V2.2) ===== */
+.ico svg{width:20px; height:20px; display:block;}
+.nav-btn .ico{width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; color:var(--ink-3);}
+.nav-btn.active .ico{color:var(--accent);}
+.brand-ic{color:var(--accent);} .brand-ic svg{width:24px; height:24px;}
+.nav-group{display:flex; flex-direction:column; gap:2px; margin-bottom:6px;}
+.nav-sec{font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); padding:10px 12px 4px;}
+.sidebar-foot .nav-btn{margin-bottom:8px;}
+#mobileNav button .ico{width:22px; height:22px;}
+#mobileNav button.fab{position:relative;}
+#mobileNav button.fab .ico{background:var(--accent); color:#fff; width:44px; height:44px; border-radius:50%; box-shadow:0 4px 12px rgba(42,120,214,.4); margin-top:-16px; margin-bottom:1px;}
+#mobileNav button.fab .ico svg{width:24px; height:24px;}
+#mobileNav button.fab{color:var(--accent); font-weight:600;}
+
+/* ===== Action sheet / bottom sheet ===== */
+#modalBack.as-sheet{align-items:center;}
+.sheet-list{display:flex; flex-direction:column; gap:4px;}
+.sheet-item{display:flex; align-items:center; gap:13px; width:100%; text-align:left; background:none; border:none; padding:13px 12px; border-radius:12px; color:var(--ink-1); font-size:15px;}
+.sheet-item:hover{background:var(--accent-soft);}
+.sheet-item .s-ic{width:38px; height:38px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+.sheet-item .s-ic svg{width:20px; height:20px;}
+.sheet-item.out .s-ic{background:rgba(235,104,52,.14); color:var(--s2);}
+.sheet-item.in .s-ic{background:rgba(12,163,12,.14); color:var(--good-text);}
+.sheet-item .s-tx{display:flex; flex-direction:column; min-width:0;}
+.sheet-item .s-tx b{font-weight:600;} .sheet-item .s-tx span{font-size:12.5px; color:var(--ink-3);}
+@media (max-width:600px){
+  #modalBack.as-sheet{align-items:flex-end; padding:0;}
+  #modalBack.as-sheet .modal{max-width:100%; width:100%; border-radius:20px 20px 0 0; max-height:82dvh; padding-bottom:calc(20px + env(safe-area-inset-bottom));}
+}
+
+/* ===== Score de saúde financeira (V2.3) ===== */
+.gauge-wrap{display:flex; align-items:center; gap:22px; flex-wrap:wrap;}
+.gauge{position:relative; width:132px; height:132px; flex-shrink:0;}
+.gauge .g-num{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;}
+.gauge .g-num b{font-size:34px; font-weight:700; line-height:1; font-variant-numeric:tabular-nums;}
+.gauge .g-num span{font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:.05em;}
+.score-bars{flex:1; min-width:230px; display:flex; flex-direction:column; gap:11px;}
+.score-bars .sb-row .flex{font-size:13px; margin-bottom:4px;}
+.pill{display:inline-block; padding:3px 12px; border-radius:99px; font-size:13px; font-weight:700;}
+.insight{display:flex; gap:11px; align-items:flex-start; padding:13px 15px; border:1px solid var(--border); border-radius:12px; background:var(--surface-1);}
+.insight .i-ic{width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0; background:var(--accent-soft); color:var(--accent);}
+.insight .i-ic svg{width:17px; height:17px;}
+.insight .i-body{flex:1; min-width:0;} .insight .i-body .i-t{font-size:14px;} .insight .i-body .i-d{font-size:12.5px; color:var(--ink-2); margin-top:1px;}
+
 .btn{
   display:inline-flex; align-items:center; gap:8px; padding:10px 16px; border-radius:10px;
   border:1px solid transparent; background:var(--accent); color:#fff; font-weight:600; font-size:14px;
@@ -344,18 +388,31 @@ svg text{font-family:inherit;}
 <!-- ============ APP ============ -->
 <div id="app" class="hidden">
   <aside>
-    <div class="brand"><span>💰</span> Minha Finança</div>
-    <button class="nav-btn active" data-view="dashboard"><span class="ico">📊</span> Dashboard</button>
-    <button class="nav-btn" data-view="transacoes"><span class="ico">🧾</span> Transações</button>
-    <button class="nav-btn" data-view="comprovante"><span class="ico">📸</span> Comprovante IA</button>
-    <button class="nav-btn" data-view="dividas"><span class="ico">📉</span> Dívidas</button>
-    <button class="nav-btn" data-view="boletos"><span class="ico">📄</span> Boletos & Contas</button>
-    <button class="nav-btn" data-view="orcamento"><span class="ico">🧮</span> Orçamento</button>
-    <button class="nav-btn" data-view="investimentos"><span class="ico">📈</span> Investimentos</button>
-    <button class="nav-btn" data-view="plano"><span class="ico">🎯</span> Plano 5 Anos</button>
-    <button class="nav-btn" data-view="consultor"><span class="ico">🤖</span> Consultor IA</button>
-    <button class="nav-btn" data-view="config"><span class="ico">⚙️</span> Configurações</button>
+    <div class="brand"><span class="ico brand-ic" data-ic="wallet"></span> Minha Finança</div>
+    <div class="nav-group">
+      <div class="nav-sec">Visão geral</div>
+      <button class="nav-btn active" data-view="dashboard"><span class="ico" data-ic="home"></span> Início</button>
+      <button class="nav-btn" data-view="saude"><span class="ico" data-ic="heart"></span> Saúde financeira</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-sec">Movimentações</div>
+      <button class="nav-btn" data-view="transacoes"><span class="ico" data-ic="list"></span> Transações</button>
+      <button class="nav-btn" data-view="boletos"><span class="ico" data-ic="file"></span> Contas & Boletos</button>
+      <button class="nav-btn" data-view="comprovante"><span class="ico" data-ic="camera"></span> Ler comprovante</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-sec">Planejamento</div>
+      <button class="nav-btn" data-view="orcamento"><span class="ico" data-ic="pie"></span> Orçamento</button>
+      <button class="nav-btn" data-view="dividas"><span class="ico" data-ic="trend-down"></span> Dívidas</button>
+      <button class="nav-btn" data-view="investimentos"><span class="ico" data-ic="trend-up"></span> Investimentos</button>
+      <button class="nav-btn" data-view="plano"><span class="ico" data-ic="target"></span> Meta 5 anos</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-sec">Inteligência</div>
+      <button class="nav-btn" data-view="consultor"><span class="ico" data-ic="sparkles"></span> Consultor IA</button>
+    </div>
     <div class="sidebar-foot">
+      <button class="nav-btn" data-view="config"><span class="ico" data-ic="settings"></span> Configurações</button>
       <div class="user-chip"><img id="userPhoto" alt=""><span id="userName"></span></div>
       <button class="link-btn" id="btnTheme">Alternar tema claro/escuro</button>
       <button class="link-btn" id="btnLogout">Sair</button>
@@ -365,14 +422,11 @@ svg text{font-family:inherit;}
   <main id="mainContent"><!-- views renderizadas via JS --></main>
 
   <nav id="mobileNav">
-    <button data-view="dashboard" class="active"><span class="ico">📊</span>Painel</button>
-    <button data-view="transacoes"><span class="ico">🧾</span>Extrato</button>
-    <button data-view="comprovante"><span class="ico">📸</span>IA Foto</button>
-    <button data-view="dividas"><span class="ico">📉</span>Dívidas</button>
-    <button data-view="boletos"><span class="ico">📄</span>Boletos</button>
-    <button data-view="orcamento"><span class="ico">🧮</span>Orçam.</button>
-    <button data-view="consultor"><span class="ico">🤖</span>IA</button>
-    <button data-view="config"><span class="ico">⚙️</span>Ajustes</button>
+    <button data-view="dashboard" class="active"><span class="ico" data-ic="home"></span>Início</button>
+    <button data-view="transacoes"><span class="ico" data-ic="list"></span>Extrato</button>
+    <button data-action="lancar" class="fab"><span class="ico" data-ic="plus"></span>Lançar</button>
+    <button data-action="planejar"><span class="ico" data-ic="layers"></span>Planejar</button>
+    <button data-action="mais"><span class="ico" data-ic="more"></span>Mais</button>
   </nav>
 </div>
 
@@ -380,7 +434,7 @@ svg text{font-family:inherit;}
 <div id="toast"></div>
 <div id="modalBack" class="hidden"><div class="modal" id="modalBox"></div></div>
 
-<script src="firebase-config.js?v=12"></script>
-<script type="module" src="app.js?v=12"></script>
+<script src="firebase-config.js?v=13"></script>
+<script type="module" src="app.js?v=13"></script>
 </body>
 </html>
