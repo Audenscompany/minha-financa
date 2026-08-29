@@ -13,7 +13,7 @@ import {
 
 // ---------- Estado global ----------
 let app, auth, db, user = null, hid = null;
-let TX = [], DEBTS = [], INVEST = [], BILLS = [], SETTINGS = {}, HOUSEHOLD = {};
+let TX = [], DEBTS = [], INVEST = [], BILLS = [], CARDS = [], SETTINGS = {}, HOUSEHOLD = {};
 let currentView = "dashboard";
 let unsubs = [];
 let chatHistory = [];
@@ -21,6 +21,8 @@ let receiptDraft = null;
 let dashPeriod = "mes"; // mes | mesPassado | m3 | m6 | ano
 let calYM = null;       // 'YYYY-MM' do calendário
 let budYM = null;       // 'YYYY-MM' do orçamento (mês planejado)
+let cardYM = null;      // 'YYYY-MM' da aba Cartões
+let faturaDraft = [];
 let flowRange = "12";   // 6 | 12 | ano  (gráfico de fluxo)
 let analysisPeriod = "mes"; // mes | m3 | m6 (análise de gastos)
 
@@ -200,6 +202,7 @@ async function enterApp() {
   listen("debts", arr => { DEBTS = arr; });
   listen("investments", arr => { INVEST = arr.sort((a,b) => b.date.localeCompare(a.date)); });
   listen("bills", arr => { BILLS = arr.sort((a,b) => (a.dueDate||"").localeCompare(b.dueDate||"")); });
+  listen("cards", arr => { CARDS = arr.sort((a,b) => (a.name||"").localeCompare(b.name||"")); });
   unsubs.push(onSnapshot(doc(db, "households", hid, "meta", "settings"), s => {
     SETTINGS = s.exists() ? s.data() : {};
     render();
@@ -412,7 +415,7 @@ function render() {
   const el = $("#mainContent");
   if (!el) return;
   const views = {
-    dashboard: viewDashboard, saude: viewSaude, calendario: viewCalendario, transacoes: viewTransacoes, comprovante: viewComprovante,
+    dashboard: viewDashboard, saude: viewSaude, calendario: viewCalendario, cartoes: viewCartoes, transacoes: viewTransacoes, comprovante: viewComprovante,
     dividas: viewDividas, boletos: viewBoletos, orcamento: viewOrcamento, investimentos: viewInvest,
     plano: viewPlano, consultor: viewConsultor, config: viewConfig
   };
@@ -1109,6 +1112,193 @@ async function regularizeBill(b) {
 }
 
 // ============================================================
+// VIEW: CARTÕES (faturas por categoria)
+// ============================================================
+function cardTxs(cardId, ym) {
+  return TX.filter(t => t.card === cardId && t.type === "saida" && monthKey(t.date) === ym).sort((a, b) => b.date.localeCompare(a.date));
+}
+function cardBreakdown(cardId, ym) {
+  const map = {};
+  for (const t of cardTxs(cardId, ym)) map[t.category] = (map[t.category] || 0) + t.amount;
+  return Object.entries(map).sort((a, b) => b[1] - a[1]);
+}
+function viewCartoes() {
+  const ym = cardYM || todayISO().slice(0, 7);
+  return `
+  <div class="view-head">
+    <div><h2>Cartões</h2><div class="sub">Suas faturas quebradas por categoria — veja no que você gastou</div></div>
+    <div class="flex">
+      <input type="month" id="cardMonth" value="${ym}" style="padding:8px 11px; border-radius:9px; border:1px solid var(--border); background:var(--page)">
+      <button class="btn" id="btnAddCard"><span class="ico" data-ic="plus" style="width:14px;height:14px"></span> Novo cartão</button>
+    </div>
+  </div>
+
+  <div class="ai-box" style="margin-bottom:16px; font-size:13px">💡 A fatura não é um gasto novo — cada <b>compra</b> já conta no seu orçamento por categoria. Aqui você importa a fatura, a IA separa cada compra (transporte, vestuário, assinatura…) e você vê exatamente onde o dinheiro do cartão foi.</div>
+
+  ${!CARDS.length ? `<div class="panel"><div class="empty"><span class="big">💳</span>
+    Você ainda não cadastrou nenhum cartão.<br>Clique em <b>Novo cartão</b> para começar — depois é só <b>importar a fatura</b>.</div></div>`
+    : CARDS.map(c => {
+      const txs = cardTxs(c.id, ym), tot = txs.reduce((a, t) => a + t.amount, 0), cats = cardBreakdown(c.id, ym);
+      const maxC = cats.length ? cats[0][1] : 1;
+      return `<div class="panel section-gap">
+        <div class="panel-head">
+          <div><h3>${esc(c.name)}</h3><div class="chart-sub" style="margin-top:2px">Fatura de ${monthLabel(ym)}${c.dueDay ? " · vence dia " + c.dueDay : ""}</div></div>
+          <div class="flex">
+            <button class="btn secondary small" data-imp-fatura="${c.id}"><span class="ico" data-ic="file" style="width:13px;height:13px"></span> Importar fatura</button>
+            <button class="btn secondary small" data-add-compra="${c.id}">+ Compra</button>
+            <button class="icon-btn" data-edit-card="${c.id}">✏️</button>
+            <button class="icon-btn" data-del-card="${c.id}">🗑️</button>
+          </div>
+        </div>
+        <div class="flex spread" style="align-items:flex-end; margin-bottom:14px">
+          <div><div class="muted" style="font-size:12.5px">Total da fatura</div>
+            <div style="font-size:26px; font-weight:700">${fmtBRL(tot)}</div></div>
+          <div class="muted" style="font-size:13px">${txs.length} compra(s)</div>
+        </div>
+        ${cats.length ? `<div style="display:flex; flex-direction:column; gap:10px">
+          ${cats.map(([cat, v]) => `<div>
+            <div class="flex spread" style="font-size:13px; margin-bottom:3px">
+              <span style="display:flex; align-items:center; gap:8px"><span class="ia-ic" style="width:26px;height:26px">${icon(catIcon(cat))}</span>${esc(cat)}</span>
+              <b style="font-variant-numeric:tabular-nums">${fmtBRL(v)} · ${(v / tot * 100).toFixed(0)}%</b></div>
+            <div class="meter"><div style="width:${(v / maxC * 100).toFixed(1)}%; background:var(--s2)"></div></div>
+          </div>`).join("")}
+        </div>
+        <div class="table-wrap section-gap"><table class="inv-table">
+          <thead><tr><th>Compra</th><th>Categoria</th><th>Data</th><th class="num">Valor</th><th></th></tr></thead>
+          <tbody>${txs.slice(0, 10).map(t => `<tr>
+            <td><b>${esc(t.desc || "—")}</b></td>
+            <td><span class="chip">${esc(t.category)}</span></td>
+            <td style="white-space:nowrap; color:var(--ink-2)">${t.date.split("-").reverse().slice(0,2).join("/")}</td>
+            <td class="num">${fmtBRL(t.amount)}</td>
+            <td><button class="icon-btn" data-edit-tx="${t.id}">✏️</button><button class="icon-btn" data-del-tx="${t.id}">🗑️</button></td>
+          </tr>`).join("")}</tbody></table></div>
+        ${txs.length > 10 ? `<div class="muted section-gap" style="text-align:center; font-size:13px">Mostrando 10 de ${txs.length} compras</div>` : ""}`
+        : `<div class="empty" style="padding:24px 10px"><span class="big">🧾</span>Nenhuma compra em ${monthLabel(ym)}. Clique em <b>Importar fatura</b> ou <b>+ Compra</b>.</div>`}
+      </div>`;
+    }).join("")}`;
+}
+function modalCard(c = null) {
+  const t = c || {};
+  openModal(`
+    <h3>${c ? "Editar" : "Novo"} cartão</h3>
+    <div class="field"><label>Nome do cartão</label><input id="cName" value="${esc(t.name || "")}" placeholder="Ex.: Nubank, Cartão Mercado Pago, Itaú"></div>
+    <div class="form-row">
+      <div class="field"><label>Dia de fechamento (opcional)</label><input id="cClose" type="number" min="1" max="31" value="${t.closeDay ?? ""}"></div>
+      <div class="field"><label>Dia de vencimento (opcional)</label><input id="cDue" type="number" min="1" max="31" value="${t.dueDay ?? ""}"></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Salvar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const name = $("#cName").value.trim();
+    if (!name) return toast("Dê um nome ao cartão.");
+    const data = { name, closeDay: $("#cClose").value ? +$("#cClose").value : null, dueDay: $("#cDue").value ? +$("#cDue").value : null };
+    try {
+      if (c) await updateDoc(doc(db, "households", hid, "cards", c.id), data);
+      else await addDoc(collection(db, "households", hid, "cards"), data);
+      closeModal(); toast("Cartão salvo.");
+    } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+function modalCardPurchase(cardId) {
+  const card = CARDS.find(c => c.id === cardId);
+  openModal(`
+    <h3>Nova compra — ${esc(card?.name || "cartão")}</h3>
+    <div class="form-row">
+      <div class="field"><label>Valor (R$)</label><input id="pAmount" inputmode="decimal" placeholder="0,00"></div>
+      <div class="field"><label>Data</label><input id="pDate" type="date" value="${todayISO()}"></div>
+    </div>
+    <div class="field"><label>Descrição</label><input id="pDesc" placeholder="Ex.: Posto Shell, Zara, Spotify"></div>
+    <div class="field"><label>Categoria</label><select id="pCat">${catsOut().map(c => `<option>${c}</option>`).join("")}</select></div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Registrar compra</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const amount = parseMoney($("#pAmount").value);
+    if (!amount) return toast("Informe o valor.");
+    try {
+      await addDoc(collection(db, "households", hid, "transactions"), {
+        type: "saida", amount, date: $("#pDate").value || todayISO(), desc: $("#pDesc").value.trim(),
+        category: $("#pCat").value, method: "Cartão de crédito", card: cardId, createdBy: user.email, createdAt: new Date().toISOString()
+      });
+      closeModal(); toast("Compra registrada no cartão.");
+    } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+
+const FATURA_SYS = `Você extrai as compras de uma FATURA de cartão de crédito brasileira. Responda APENAS com JSON válido, sem markdown:
+{"itens":[{"desc":"estabelecimento","valor":123.45,"data":"YYYY-MM-DD","categoria":"uma de: ${CATS_OUT_BASE.join(", ")}","parcela":"3/10 ou vazio"}]}
+Regras: um item por linha de compra; valor sempre número com ponto decimal; data da compra (se só houver dia/mês, use o ano da fatura); categorize pelo estabelecimento (posto→Transporte, mercado→Mercado, restaurante/ifood→Alimentação, roupa→Vestuário, streaming→Assinaturas, farmácia→Saúde etc.). IGNORE: pagamento de fatura anterior, estorno, encargos/juros, IOF, anuidade se preferir Outros. Se não houver compras, {"itens":[]}.`;
+
+function modalImportFatura(cardId) {
+  if (!hasAIKey()) return toast("Configure sua chave da API Claude em Configurações para importar a fatura.");
+  const card = CARDS.find(c => c.id === cardId);
+  openModal(`
+    <h3>Importar fatura — ${esc(card?.name || "cartão")}</h3>
+    <p class="muted" style="margin:-8px 0 12px; font-size:13px">Envie a fatura (PDF, print ou CSV). A IA separa cada compra por categoria. Você confere antes de salvar — nada é lançado sem sua confirmação.</p>
+    <div class="dropzone" id="fatDrop">
+      <span class="big">🧾</span><b>Arraste a fatura aqui</b><br>ou
+      <div class="flex" style="justify-content:center; margin-top:10px"><button class="btn small" id="fatPick">Escolher arquivo</button></div>
+      <div class="muted" style="margin-top:8px; font-size:12px">.pdf, .png, .jpg, .csv</div>
+      <input type="file" id="fatFile" accept=".pdf,.csv,.txt,image/*" class="hidden">
+    </div>
+    <div id="fatStatus" class="section-gap"></div>
+    <div id="fatResult"></div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#fatPick").onclick = () => $("#fatFile").click();
+  $("#fatFile").onchange = e => e.target.files[0] && importFatura(e.target.files[0], cardId);
+  const dz = $("#fatDrop");
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add("drag"); };
+  dz.ondragleave = () => dz.classList.remove("drag");
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("drag"); e.dataTransfer.files[0] && importFatura(e.dataTransfer.files[0], cardId); };
+}
+async function importFatura(file, cardId) {
+  const status = $("#fatStatus");
+  status.innerHTML = `<div class="ai-box loading-dots">🤖 Lendo a fatura</div>`;
+  $("#fatResult").innerHTML = "";
+  try {
+    const blocks = await fileToContentBlock(file);
+    const raw = await callClaude({ maxTokens: 4000, system: FATURA_SYS, messages: [{ role: "user", content: [{ type: "text", text: "Extraia as compras desta fatura." }, ...blocks] }] });
+    const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    faturaDraft = (json.itens || []).filter(i => +i.valor > 0);
+    if (!faturaDraft.length) throw new Error("Nenhuma compra encontrada na fatura.");
+    const tot = faturaDraft.reduce((a, i) => a + +i.valor, 0);
+    status.innerHTML = `<div class="ai-box">✅ ${faturaDraft.length} compra(s) · total ${fmtBRL(tot)} — confira as categorias e importe.</div>`;
+    $("#fatResult").innerHTML = `
+      <div style="max-height:40vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-top:10px">
+        ${faturaDraft.map((i, idx) => `<div class="flex" style="gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--border); border-radius:9px">
+          <input type="checkbox" class="fat-chk" data-i="${idx}" checked style="width:16px;height:16px">
+          <div style="flex:1; min-width:0"><b style="font-size:13.5px">${esc(i.desc)}</b>${i.parcela ? ` <span class="chip">${esc(i.parcela)}</span>` : ""}
+            <div class="muted" style="font-size:11.5px">${i.data || "sem data"}</div></div>
+          <select class="fat-cat" data-i="${idx}" style="padding:5px 8px; border-radius:7px; border:1px solid var(--border); background:var(--page); font-size:12px">
+            ${catsOut().map(c => `<option ${c === i.categoria ? "selected" : ""}>${c}</option>`).join("")}</select>
+          <b style="font-variant-numeric:tabular-nums; white-space:nowrap">${fmtBRL(+i.valor)}</b>
+        </div>`).join("")}
+      </div>
+      <button class="btn" id="fatConfirm" style="width:100%; justify-content:center; margin-top:12px">✅ Importar compras selecionadas</button>`;
+    $("#fatConfirm").onclick = async () => {
+      const chosen = [...document.querySelectorAll(".fat-chk:checked")].map(c => +c.dataset.i);
+      if (!chosen.length) return toast("Marque ao menos uma compra.");
+      $("#fatConfirm").disabled = true; $("#fatConfirm").textContent = "Importando…";
+      try {
+        for (const idx of chosen) {
+          const i = faturaDraft[idx];
+          const cat = document.querySelector(`.fat-cat[data-i="${idx}"]`)?.value || i.categoria || "Outros";
+          await addDoc(collection(db, "households", hid, "transactions"), {
+            type: "saida", amount: +i.valor, date: i.data || todayISO(),
+            desc: (i.desc || "Compra") + (i.parcela ? " (" + i.parcela + ")" : ""),
+            category: catsOut().includes(cat) ? cat : "Outros", method: "Cartão de crédito",
+            card: cardId, createdBy: user.email, createdAt: new Date().toISOString(), imported: true
+          });
+        }
+        closeModal(); toast(`💳 ${chosen.length} compra(s) importada(s) da fatura!`);
+      } catch (e) { toast("Erro: " + e.message); $("#fatConfirm").disabled = false; }
+    };
+  } catch (e) {
+    status.innerHTML = `<div class="ai-box" style="background:rgba(208,59,59,.1)">⚠️ ${esc(e.message)}</div>`;
+  }
+}
+
+// ============================================================
 // VIEW: CALENDÁRIO (contas a pagar por dia)
 // ============================================================
 function viewCalendario() {
@@ -1732,7 +1922,8 @@ function viewOrcamento() {
   const fixas = mc.fixasTotal, dividas = mc.dividasTotal;
   const budgets = getBudgets();
   const budgetTotal = budgets.reduce((a, [, v]) => a + v, 0);
-  const sobra = renda - fixas - dividas - budgetTotal;
+  // Limites são apenas teto de controle — NÃO entram como gasto na sobra.
+  const sobra = renda - fixas - dividas;
   const spentByCat = Object.fromEntries(catSpend(mk));
   const spentBudgeted = budgets.reduce((a, [c]) => a + (spentByCat[c] || 0), 0);
   const now = new Date(), dayOfMonth = now.getDate();
@@ -1763,15 +1954,16 @@ function viewOrcamento() {
     <div class="bkpi"><div class="bk-label">Dívidas no mês</div>
       <div class="bk-val" style="color:${dividas > 0 ? "var(--critical)" : "var(--ink-1)"}">${fmtBRL(dividas)}</div>
       <div class="bk-foot"><span class="ico">${icon("trend-down")}</span> ${mc.debts.length} parcela(s) negociada(s)</div></div>
-    <div class="bkpi"><div class="bk-label">Sobra p/ metas</div>
+    <div class="bkpi"><div class="bk-label">Sobra p/ variáveis + metas</div>
       <div class="bk-val" style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</div>
-      <div class="bk-foot"><span class="ico">${icon("target")}</span> renda − fixas − dívidas − limites</div></div>
+      <div class="bk-foot"><span class="ico">${icon("target")}</span> renda − fixas − dívidas</div></div>
   </div>
 
   <div class="card section-gap" style="border-left:4px solid ${sobra >= 0 ? "var(--good)" : "var(--critical)"}">
     <div class="flex spread" style="flex-wrap:wrap; gap:10px">
       <div><h3 style="display:inline">${sobra >= 0 ? "✅ " + monthLabel(mk) + " fecha no positivo" : "⚠️ " + monthLabel(mk) + " não fecha"}</h3>
-        <div class="chart-sub" style="margin-top:4px">Renda ${fmtBRL0(renda)} − contas fixas ${fmtBRL0(fixas)} − dívidas ${fmtBRL0(dividas)} − limites ${fmtBRL0(budgetTotal)} = <b style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</b></div></div>
+        <div class="chart-sub" style="margin-top:4px">Renda ${fmtBRL0(renda)} − contas fixas ${fmtBRL0(fixas)} − dívidas ${fmtBRL0(dividas)} = <b style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</b> livres p/ gastos variáveis e metas</div>
+        ${budgets.length ? `<div class="chart-sub" style="margin-top:3px; color:var(--ink-3)"><span class="ico" style="width:13px;height:13px;vertical-align:-2px">${icon("target", 13)}</span> Seus limites de controle somam ${fmtBRL0(budgetTotal)}${sobra >= 0 ? (budgetTotal > sobra ? ` — acima da sobra, vale revisar os tetos` : ` — cabem na sobra`) : ""} · não são descontados, servem só para não estourar cada categoria no cartão</div>` : ""}</div>
       <div style="text-align:right"><div class="muted" style="font-size:12px">Comprometido (fixas+dívidas)</div>
         <div style="font-size:20px; font-weight:700">${fmtBRL0(compromissos)} <span class="muted" style="font-size:13px; font-weight:500">(${renda > 0 ? (compromissos / renda * 100).toFixed(0) : 0}% da renda)</span></div></div>
     </div>
@@ -2236,6 +2428,7 @@ function navAction(action) {
   ]);
   if (action === "mais") return openSheet("Mais", [
     { icon: "file", label: "Contas & Boletos", onClick: () => switchView("boletos") },
+    { icon: "card", label: "Cartões", desc: "Faturas por categoria", onClick: () => switchView("cartoes") },
     { icon: "calendar", label: "Calendário", desc: "Contas a pagar por dia", onClick: () => switchView("calendario") },
     { icon: "camera", label: "Ler comprovante", onClick: () => switchView("comprovante") },
     { icon: "sparkles", label: "Consultor IA", onClick: () => switchView("consultor") },
@@ -2861,6 +3054,19 @@ function attachHandlers() {
     calYM = base.toISOString().slice(0, 7); render();
   });
   document.querySelectorAll("[data-cal-day]").forEach(c => c.onclick = () => modalDayBills(c.dataset.calDay));
+
+  // cartões
+  const cardM = $("#cardMonth");
+  if (cardM) cardM.onchange = () => { cardYM = cardM.value; render(); };
+  $("#btnAddCard") && ($("#btnAddCard").onclick = () => modalCard());
+  document.querySelectorAll("[data-imp-fatura]").forEach(b => b.onclick = () => modalImportFatura(b.dataset.impFatura));
+  document.querySelectorAll("[data-add-compra]").forEach(b => b.onclick = () => modalCardPurchase(b.dataset.addCompra));
+  document.querySelectorAll("[data-edit-card]").forEach(b => b.onclick = () => modalCard(CARDS.find(c => c.id === b.dataset.editCard)));
+  document.querySelectorAll("[data-del-card]").forEach(b => b.onclick = async () => {
+    const c = CARDS.find(x => x.id === b.dataset.delCard);
+    if (confirm(`Remover o cartão "${c?.name || ""}"? As compras já lançadas continuam nas transações.`))
+      await deleteDoc(doc(db, "households", hid, "cards", b.dataset.delCard));
+  });
 
   // boletos
   $("#btnAddBill") && ($("#btnAddBill").onclick = () => modalBill());
