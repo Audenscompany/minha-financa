@@ -19,6 +19,7 @@ let unsubs = [];
 let chatHistory = [];
 let receiptDraft = null;
 let dashPeriod = "mes"; // mes | mesPassado | m3 | m6 | ano
+let calYM = null;       // 'YYYY-MM' do calendário
 let flowRange = "12";   // 6 | 12 | ano  (gráfico de fluxo)
 let analysisPeriod = "mes"; // mes | m3 | m6 (análise de gastos)
 
@@ -410,7 +411,7 @@ function render() {
   const el = $("#mainContent");
   if (!el) return;
   const views = {
-    dashboard: viewDashboard, saude: viewSaude, transacoes: viewTransacoes, comprovante: viewComprovante,
+    dashboard: viewDashboard, saude: viewSaude, calendario: viewCalendario, transacoes: viewTransacoes, comprovante: viewComprovante,
     dividas: viewDividas, boletos: viewBoletos, orcamento: viewOrcamento, investimentos: viewInvest,
     plano: viewPlano, consultor: viewConsultor, config: viewConfig
   };
@@ -1104,6 +1105,99 @@ async function regularizeBill(b) {
       toast(`📉 ${n} parcela(s) viraram dívida. Nos Boletos ficou a parcela de ${monthLabel(monthKey(nextDue))}.`);
     }
   } catch (e) { toast("Erro: " + e.message); }
+}
+
+// ============================================================
+// VIEW: CALENDÁRIO (contas a pagar por dia)
+// ============================================================
+function viewCalendario() {
+  const ym = calYM || todayISO().slice(0, 7);
+  const [Y, M] = ym.split("-").map(Number);
+  const first = new Date(Y, M - 1, 1);
+  const startDow = first.getDay();               // 0=dom
+  const daysInMonth = new Date(Y, M, 0).getDate();
+  const today = todayISO();
+  const label = first.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+
+  // contas a pagar por dia do mês
+  const pend = pendingBills();
+  const byDay = {};
+  for (const b of pend) if (b.dueDate && monthKey(b.dueDate) === ym) {
+    const d = +b.dueDate.split("-")[2];
+    (byDay[d] = byDay[d] || []).push(b);
+  }
+  const monthTotal = pend.filter(b => b.dueDate && monthKey(b.dueDate) === ym).reduce((a, b) => a + b.amount, 0);
+  const overdueTotal = pend.filter(b => b.dueDate && b.dueDate < today).reduce((a, b) => a + b.amount, 0);
+
+  const dows = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+  let cells = "";
+  for (let i = 0; i < startDow; i++) cells += `<div class="cal-cell empty"></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dISO = `${ym}-${String(day).padStart(2, "0")}`;
+    const list = byDay[day] || [];
+    const tot = list.reduce((a, b) => a + b.amount, 0);
+    const isToday = dISO === today;
+    const overdue = dISO < today;
+    const pill = tot > 0
+      ? `<div class="cal-ev ${overdue ? "crit" : "warn"}" title="${list.map(b => esc(b.name) + ' ' + fmtBRL(b.amount)).join(' · ')}"><span class="cal-dot" style="background:currentColor"></span><span class="cal-ev-txt">${fmtBRL0(tot)}</span></div>`
+      : "";
+    cells += `<div class="cal-cell ${isToday ? "today" : ""}" ${tot > 0 ? `data-cal-day="${dISO}" style="cursor:pointer"` : ""}>
+      <span class="cal-daynum">${day}</span>${pill}${list.length > 1 ? `<span class="cal-more">${list.length} contas</span>` : ""}</div>`;
+  }
+
+  return `
+  <div class="view-head">
+    <div><h2>Calendário</h2><div class="sub">Contas a pagar do mês — clique num dia para ver os detalhes</div></div>
+    <div class="flex">
+      <input type="month" id="calMonth" value="${ym}" style="padding:8px 11px; border-radius:9px; border:1px solid var(--border); background:var(--page)">
+      <button class="btn" id="btnAddBill"><span class="ico" data-ic="plus" style="width:14px;height:14px"></span> Nova conta</button>
+    </div>
+  </div>
+
+  <div class="grid tiles">
+    <div class="card tile"><div class="label">Total a pagar em ${monthLabel(ym)}</div><div class="value">${fmtBRL(monthTotal)}</div></div>
+    <div class="card tile"><div class="label">Vencido (acumulado)</div>
+      <div class="value" style="color:${overdueTotal > 0 ? "var(--critical)" : "var(--good-text)"}">${fmtBRL(overdueTotal)}</div>
+      <div class="delta">${overdueTotal > 0 ? "regularize o quanto antes" : "nada em atraso 🎉"}</div></div>
+  </div>
+
+  <div class="panel section-gap">
+    <div class="cal-head">
+      <div class="cal-nav">
+        <button class="cal-arrow" data-cal="prev">‹</button>
+        <span class="cal-month">${label}</span>
+        <button class="cal-arrow" data-cal="next">›</button>
+      </div>
+      <button class="btn secondary small" data-cal="today">Hoje</button>
+    </div>
+    <div class="cal-grid">
+      ${dows.map(d => `<div class="cal-dow">${d}</div>`).join("")}
+      ${cells}
+    </div>
+    <div class="cal-legend">
+      <span class="k"><span class="s" style="background:var(--critical)"></span>Vencido</span>
+      <span class="k"><span class="s" style="background:var(--warning)"></span>A vencer</span>
+      <span class="k"><span class="s" style="background:var(--accent)"></span>Hoje</span>
+    </div>
+  </div>`;
+}
+function modalDayBills(iso) {
+  const list = pendingBills().filter(b => b.dueDate === iso).sort((a, b) => b.amount - a.amount);
+  const tot = list.reduce((a, b) => a + b.amount, 0);
+  const d = new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+  openModal(`
+    <h3 style="text-transform:capitalize">${d}</h3>
+    <p class="muted" style="margin:-8px 0 14px">${list.length} conta(s) · total ${fmtBRL(tot)}</p>
+    <div style="display:flex; flex-direction:column; gap:8px">
+      ${list.map(b => `<div class="flex spread" style="padding:11px 12px; border:1px solid var(--border); border-radius:10px; gap:10px">
+        <div class="inv-asset"><span class="ia-ic">${icon(catIcon(b.category))}</span>
+          <div><b>${esc(b.name)}</b>${b.dda ? ' <span class="chip">DDA</span>' : ""}<div class="muted" style="font-size:12px">${esc(b.category)}</div></div></div>
+        <div style="text-align:right"><b>${fmtBRL(b.amount)}</b>
+          <div><button class="btn small" data-pay-bill="${b.id}" style="margin-top:4px">💵 Pagar</button></div></div>
+      </div>`).join("")}
+    </div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
+  $("#mCancel").onclick = closeModal;
 }
 
 function viewBoletos() {
@@ -2070,6 +2164,7 @@ function navAction(action) {
   ]);
   if (action === "mais") return openSheet("Mais", [
     { icon: "file", label: "Contas & Boletos", onClick: () => switchView("boletos") },
+    { icon: "calendar", label: "Calendário", desc: "Contas a pagar por dia", onClick: () => switchView("calendario") },
     { icon: "camera", label: "Ler comprovante", onClick: () => switchView("comprovante") },
     { icon: "sparkles", label: "Consultor IA", onClick: () => switchView("consultor") },
     { icon: "settings", label: "Configurações", onClick: () => switchView("config") },
@@ -2696,6 +2791,18 @@ function attachHandlers() {
     });
     toast(rest <= 0 ? "🎉 Dívida quitada! Parabéns!" : "Pagamento registrado.");
   });
+
+  // calendário
+  const calM = $("#calMonth");
+  if (calM) calM.onchange = () => { calYM = calM.value; render(); };
+  document.querySelectorAll("[data-cal]").forEach(b => b.onclick = () => {
+    const base = new Date((calYM || todayISO().slice(0, 7)) + "-01T12:00:00");
+    if (b.dataset.cal === "prev") base.setMonth(base.getMonth() - 1);
+    else if (b.dataset.cal === "next") base.setMonth(base.getMonth() + 1);
+    else { calYM = null; render(); return; }
+    calYM = base.toISOString().slice(0, 7); render();
+  });
+  document.querySelectorAll("[data-cal-day]").forEach(c => c.onclick = () => modalDayBills(c.dataset.calDay));
 
   // boletos
   $("#btnAddBill") && ($("#btnAddBill").onclick = () => modalBill());
