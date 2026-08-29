@@ -2468,10 +2468,12 @@ const IMPORT_SYS = `Você extrai investimentos de extratos/posições de correto
 Responda APENAS com JSON válido, sem markdown:
 {"tipo_arquivo":"posicao|movimentacoes","itens":[{"name":"nome do ativo","assetType":"uma de: Renda fixa, Tesouro, FIIs, Ações BR, Ações/ETF exterior, Cripto, Fundo, Outros","type":"aporte|rendimento|dividendo|resgate","amount":1234.56,"date":"YYYY-MM-DD","conta":"corretora/instituição"}],"resumo":"1 frase"}
 Regras:
-- Se for POSIÇÃO (saldo atual), gere UM item por ativo com type "aporte", amount = valor atual/bruto do ativo, date = hoje.
+- Se for POSIÇÃO (saldo atual), gere UM item por ativo com type "aporte", amount = "Valor Atualizado"/valor bruto do ativo.
+- DATA: NUNCA invente data. Para renda fixa use a "Data de Emissão" da linha (formato YYYY-MM-DD). Se a linha não tiver data (ex.: ações em posição), use date = null. Para MOVIMENTAÇÕES use a data real de cada linha.
 - Se for MOVIMENTAÇÕES, mapeie cada linha: aplicação/compra=aporte, provento/rendimento de renda fixa=rendimento, dividendo/JCP/rendimento de FII=dividendo, resgate/venda=resgate.
 - assetType: CDB/LCI/LCA/LC/debênture/CRI/CRA→"Renda fixa"; Tesouro Direto→"Tesouro"; FII (ticker terminando em 11)→"FIIs"; ações BR (ticker 3/4/5/6)→"Ações BR"; ETF/BDR/exterior→"Ações/ETF exterior"; cripto→"Cripto"; fundo→"Fundo".
-- amount sempre número com ponto decimal. Ignore linhas de cabeçalho/total. Se não houver investimentos, {"itens":[]}.`;
+- name: use o nome do produto + código quando houver (ex.: "CDB Banco C6 - CDB8266ESQG"). conta: a instituição/corretora.
+- amount sempre número com ponto decimal. Ignore linhas de cabeçalho e de "Total". Se não houver investimentos, {"itens":[]}.`;
 
 let importDraft = [];
 function modalImportInvest() {
@@ -2485,10 +2487,17 @@ function modalImportInvest() {
       <div class="muted" style="margin-top:8px; font-size:12px">.xlsx, .csv, .pdf, .png, .jpg</div>
       <input type="file" id="impFile" accept=".xlsx,.xls,.csv,.txt,.pdf,image/*" class="hidden">
     </div>
+    ${(() => { const n = INVEST.filter(i => i.imported).length; return n ? `<div class="flex spread" style="margin-top:12px; font-size:13px; color:var(--ink-2)"><span>Você tem ${n} lançamento(s) já importado(s).</span><button class="link-btn" id="impClear" style="color:var(--critical)">Remover importações anteriores</button></div>` : ""; })()}
     <div id="impStatus" class="section-gap"></div>
     <div id="impResult"></div>
     <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
   $("#mCancel").onclick = closeModal;
+  $("#impClear") && ($("#impClear").onclick = async () => {
+    const imported = INVEST.filter(i => i.imported);
+    if (!imported.length || !confirm(`Remover ${imported.length} lançamento(s) importado(s)? (os lançados manualmente não são afetados)`)) return;
+    try { for (const i of imported) await deleteDoc(doc(db, "households", hid, "investments", i.id)); toast(`🗑️ ${imported.length} importações removidas.`); closeModal(); }
+    catch (e) { toast("Erro: " + e.message); }
+  });
   $("#impPick").onclick = () => $("#impFile").click();
   $("#impFile").onchange = e => e.target.files[0] && importReadFile(e.target.files[0]);
   const dz = $("#impDrop");
@@ -2520,9 +2529,18 @@ async function importReadFile(file) {
     const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
     importDraft = (json.itens || []).filter(i => +i.amount > 0);
     if (!importDraft.length) throw new Error("Nenhum investimento encontrado no arquivo. Tente outro export (posição ou movimentações).");
-    status.innerHTML = `<div class="ai-box">✅ ${importDraft.length} ativo(s) encontrado(s) ${json.tipo_arquivo === "posicao" ? "(posição atual)" : "(movimentações)"} — confira e marque os que quer importar.</div>`;
+    // data de referência: da posição usar a do arquivo (posicaoYYYYMMDD) ou hoje
+    const m = (file.name || "").match(/(20\d{2})(\d{2})(\d{2})/);
+    const refDate = m ? `${m[1]}-${m[2]}-${m[3]}` : todayISO();
+    const isPos = json.tipo_arquivo === "posicao";
+    status.innerHTML = `<div class="ai-box">✅ ${importDraft.length} ativo(s) encontrado(s) ${isPos ? "(posição atual)" : "(movimentações)"} — confira e marque os que quer importar.</div>`;
     $("#impResult").innerHTML = `
-      <div style="max-height:38vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-top:10px">
+      <div class="flex spread" style="gap:10px; margin-top:12px; padding:11px 13px; border:1px solid var(--border); border-radius:10px; flex-wrap:wrap">
+        <label style="display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--ink-2)">
+          <input type="checkbox" id="impUseRef" ${isPos ? "checked" : ""} style="width:16px;height:16px"> Usar esta data para todos:</label>
+        <input type="date" id="impRefDate" value="${refDate}" style="padding:7px 10px; border-radius:8px; border:1px solid var(--border); background:var(--page)">
+      </div>
+      <div style="max-height:34vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-top:10px">
         ${importDraft.map((i, idx) => `
         <label style="display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid var(--border); border-radius:10px; cursor:pointer">
           <input type="checkbox" class="imp-chk" data-i="${idx}" checked style="width:17px; height:17px">
@@ -2535,13 +2553,14 @@ async function importReadFile(file) {
     $("#impConfirm").onclick = async () => {
       const chosen = [...document.querySelectorAll(".imp-chk:checked")].map(c => importDraft[+c.dataset.i]);
       if (!chosen.length) return toast("Marque ao menos um ativo.");
+      const useRef = $("#impUseRef")?.checked, ref = $("#impRefDate")?.value || todayISO();
       $("#impConfirm").disabled = true; $("#impConfirm").textContent = "Importando…";
       try {
         for (const i of chosen) {
           await addDoc(collection(db, "households", hid, "investments"), {
             name: String(i.name || "Ativo"), assetType: i.assetType || "Outros",
             type: ["aporte", "rendimento", "dividendo", "resgate"].includes(i.type) ? i.type : "aporte",
-            amount: +i.amount || 0, date: i.date || todayISO(),
+            amount: +i.amount || 0, date: useRef ? ref : (i.date || ref),
             conta: i.conta || "Importado", createdBy: user.email, imported: true
           });
         }
