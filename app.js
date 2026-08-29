@@ -273,6 +273,48 @@ function debtTotals() {
 function investedTotal() {
   return INVEST.reduce((a, i) => a + (i.type === "resgate" ? -i.amount : i.amount), 0);
 }
+const INV_REND = new Set(["rendimento", "dividendo"]);
+function investStats() {
+  let aportes = 0, resgates = 0, rend = 0;
+  for (const i of INVEST) {
+    if (i.type === "resgate") resgates += i.amount;
+    else if (INV_REND.has(i.type)) rend += i.amount;
+    else aportes += i.amount;
+  }
+  const patrimonio = aportes - resgates + rend;
+  const base = aportes - resgates;
+  const rentPct = base > 0 ? rend / base * 100 : 0;
+  return { aportes, resgates, rend, patrimonio, base, rentPct };
+}
+function investAllocation() {
+  const map = {};
+  for (const i of INVEST) map[i.assetType || "Outros"] = (map[i.assetType || "Outros"] || 0) + (i.type === "resgate" ? -i.amount : i.amount);
+  return Object.entries(map).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+}
+// séries cumulativas (patrimônio, aportes, rendimento) por mês
+function investSeries(months) {
+  return months.map(mk => {
+    let aportes = 0, resg = 0, rend = 0;
+    for (const i of INVEST) if (monthKey(i.date) <= mk) {
+      if (i.type === "resgate") resg += i.amount;
+      else if (INV_REND.has(i.type)) rend += i.amount;
+      else aportes += i.amount;
+    }
+    return { mk, aportes: aportes - resg, rend, patrimonio: aportes - resg + rend };
+  });
+}
+function investStreak() {
+  // meses consecutivos (terminando no atual ou anterior) com aporte
+  let streak = 0;
+  const now = new Date();
+  for (let i = 0; i < 60; i++) {
+    const mk = new Date(now.getFullYear(), now.getMonth() - i, 1).toISOString().slice(0, 7);
+    const has = INVEST.some(x => monthKey(x.date) === mk && x.type === "aporte");
+    if (has) streak++;
+    else if (i > 0) break; // permite o mês atual ainda sem aporte
+  }
+  return streak;
+}
 function catSpend(mk) {
   const map = {};
   for (const t of TX) if (t.type === "saida" && monthKey(t.date) === mk)
@@ -1243,51 +1285,199 @@ async function billToDebt(b) {
 // VIEW: INVESTIMENTOS
 // ============================================================
 function viewInvest() {
-  const total = investedTotal();
-  const mk = todayISO().slice(0, 7);
-  const mesAporte = INVEST.filter(i => monthKey(i.date) === mk && i.type !== "resgate").reduce((a,i)=>a+i.amount,0);
-  const plan = planCalc();
-  const byType = {};
-  for (const i of INVEST) byType[i.assetType || "Outros"] = (byType[i.assetType || "Outros"] || 0) + (i.type === "resgate" ? -i.amount : i.amount);
-  const types = Object.entries(byType).filter(([,v]) => v > 0).sort((a,b)=>b[1]-a[1]);
-  const maxT = types.length ? types[0][1] : 1;
+  const s = investStats(), mk = todayISO().slice(0, 7), plan = planCalc();
+  const mesAporte = INVEST.filter(i => monthKey(i.date) === mk && i.type === "aporte").reduce((a, i) => a + i.amount, 0);
+  const alloc = investAllocation();
 
   return `
   <div class="view-head">
     <div><h2>Investimentos</h2><div class="sub">Registre aportes e acompanhe seu patrimônio</div></div>
-    <button class="btn" id="btnAddInv">+ Novo aporte</button>
-  </div>
-  <div class="grid tiles">
-    <div class="card tile"><div class="label">Patrimônio investido</div><div class="value">${fmtBRL0(total)}</div></div>
-    <div class="card tile"><div class="label">Aportado neste mês</div><div class="value">${fmtBRL0(mesAporte)}</div>
-      <div class="delta ${mesAporte >= plan.pmt ? "up" : ""}">meta de aporte: ${fmtBRL0(plan.pmt)}</div></div>
-    <div class="card tile"><div class="label">Progresso da meta</div><div class="value">${plan.pct.toFixed(1)}%</div>
-      <div class="delta">${fmtBRL0(plan.goal)} em ${SETTINGS.goalYears || 5} anos</div></div>
+    <button class="btn" id="btnAddInv"><span class="ico" data-ic="plus" style="width:15px;height:15px"></span> Novo aporte</button>
   </div>
 
-  ${types.length ? `<div class="card section-gap">
-    <h3>Carteira por tipo</h3>
-    <div style="display:flex; flex-direction:column; gap:9px; margin-top:10px">
-      ${types.map(([t, v]) => `<div>
-        <div class="flex spread" style="font-size:13px; margin-bottom:3px">
-          <span style="color:var(--ink-2)">${esc(t)}</span><b style="font-variant-numeric:tabular-nums">${fmtBRL0(v)} · ${(v/total*100).toFixed(0)}%</b></div>
-        <div class="meter"><div style="width:${(v/maxT*100).toFixed(1)}%"></div></div>
-      </div>`).join("")}
-    </div></div>` : ""}
+  <div class="inv-kpi">
+    <div class="kpi-card"><div class="badge-ic b">${icon("pie")}</div>
+      <div><div class="kc-label">Patrimônio investido</div><div class="kc-val">${fmtBRL(s.patrimonio)}</div>
+      <div class="kc-ctx">${s.rend > 0 ? `<span class="trend pos">↑ ${fmtBRL0(s.rend)} (${s.rentPct.toFixed(1)}%)</span>` : "sem rendimento registrado"}</div></div></div>
+    <div class="kpi-card"><div class="badge-ic b">${icon("wallet")}</div>
+      <div><div class="kc-label">Aportado neste mês</div><div class="kc-val">${fmtBRL(mesAporte)}</div>
+      <div class="kc-ctx">meta de aporte: ${fmtBRL0(plan.pmt)}</div></div></div>
+    <div class="kpi-card"><div class="badge-ic g">${icon("trend-up")}</div>
+      <div><div class="kc-label">Rentabilidade acumulada</div><div class="kc-val" style="color:${s.rend >= 0 ? "var(--good-text)" : "var(--critical)"}">${s.rend >= 0 ? "+" : ""}${fmtBRL(s.rend)}</div>
+      <div class="kc-ctx">${s.base > 0 ? s.rentPct.toFixed(1) + "% sobre o investido" : "—"}</div></div></div>
+    <div class="kpi-card"><div class="badge-ic v">${icon("target")}</div>
+      <div><div class="kc-label">Progresso da meta</div><div class="kc-val">${plan.pct.toFixed(1)}%</div>
+      <div class="kc-ctx">${fmtBRL0(plan.goal)} em ${SETTINGS.goalYears || 5} anos</div></div></div>
+  </div>
 
-  <div class="card section-gap">
-    <h3>Movimentações</h3>
-    ${!INVEST.length ? `<div class="empty"><span class="big">🌱</span>Nenhum aporte ainda. Comece hoje — juros compostos agradecem.</div>` :
-    `<div class="table-wrap"><table>
-      <thead><tr><th>Data</th><th>Ativo</th><th>Tipo</th><th class="num">Valor</th><th></th></tr></thead>
-      <tbody>${INVEST.slice(0, 30).map(i => `<tr>
-        <td style="white-space:nowrap">${i.date.split("-").reverse().slice(0,2).join("/")}</td>
-        <td><b>${esc(i.name)}</b></td>
-        <td><span class="chip">${esc(i.assetType || "—")}</span></td>
-        <td class="num" style="color:${i.type === "resgate" ? "var(--critical)" : "var(--good-text)"}">${i.type === "resgate" ? "−" : "+"} ${fmtBRL(i.amount)}</td>
-        <td><button class="icon-btn" data-del-inv="${i.id}">🗑️</button></td>
-      </tr>`).join("")}</tbody></table></div>`}
-  </div>`;
+  <div class="inv-2col">
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h3>Evolução do patrimônio</h3>
+          <select class="mini" data-sel="flow">${[["6","Últimos 6 meses"],["12","Últimos 12 meses"],["ano","Este ano"]].map(([k,l])=>`<option value="${k}" ${flowRange===k?"selected":""}>${l}</option>`).join("")}</select></div>
+        <div class="inv-legend3">
+          <span class="l3"><span class="d" style="background:var(--s1)"></span>Patrimônio <b>${fmtBRL0(s.patrimonio)}</b></span>
+          <span class="l3"><span class="d" style="background:var(--good)"></span>Aportes <b>${fmtBRL0(s.base)}</b></span>
+          <span class="l3"><span class="d" style="background:var(--s7)"></span>Rendimento <b>${fmtBRL0(s.rend)}</b></span>
+        </div>
+        ${INVEST.length ? investEvolutionChart(flowMonths()) : `<div class="empty"><span class="big">🌱</span>Registre aportes para ver a evolução.</div>`}
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <div class="panel-head"><h3>Movimentações</h3></div>
+        ${!INVEST.length ? `<div class="empty"><span class="big">🌱</span>Nenhum aporte ainda. Comece hoje — juros compostos agradecem.</div>` :
+        `<div class="table-wrap"><table class="inv-table">
+          <thead><tr><th>Ativo</th><th>Tipo</th><th>Data</th><th class="num">Valor</th><th>Conta</th><th></th></tr></thead>
+          <tbody>${INVEST.slice(0, 8).map(i => {
+            const isOut = i.type === "resgate";
+            return `<tr>
+            <td><div class="inv-asset"><span class="ia-ic">${icon(assetIcon(i.assetType))}</span><b>${esc(i.name)}</b></div></td>
+            <td><span class="type-pill ${i.type || "aporte"}">${({aporte:"Aporte",rendimento:"Rendimento",dividendo:"Dividendo",resgate:"Resgate"})[i.type] || "Aporte"}</span></td>
+            <td style="white-space:nowrap; color:var(--ink-2)">${i.date.split("-").reverse().join("/")}</td>
+            <td class="num" style="color:${isOut ? "var(--critical)" : "var(--good-text)"}">${isOut ? "− " : ""}${fmtBRL(i.amount)}</td>
+            <td style="color:var(--ink-2)">${esc(i.conta || "Conta Investimentos")}</td>
+            <td><button class="icon-btn" title="Excluir" data-del-inv="${i.id}">🗑️</button></td>
+          </tr>`;}).join("")}</tbody></table></div>
+        ${INVEST.length > 8 ? `<div style="text-align:center; margin-top:12px"><span class="muted" style="font-size:13px">Mostrando as 8 mais recentes de ${INVEST.length}</span></div>` : ""}`}
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <div class="panel-head"><h3>Alocação da carteira</h3></div>
+        ${alloc.length ? allocDonut(alloc) : `<div class="empty" style="padding:24px 10px"><span class="big">🥧</span>Sem ativos ainda.</div>`}
+        <button class="panel-link" id="btnAddInv2">Ver detalhes da carteira →</button>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <div class="panel-head"><h3>Meta de 1 milhão</h3></div>
+        <div class="meta-ring">
+          <div class="mr-num">${ringGauge(plan.pct)}<div class="c"><b>${plan.pct.toFixed(1)}%</b><span>concluída</span></div></div>
+          <div style="flex:1; min-width:170px">
+            <div style="font-size:17px; font-weight:650">${fmtBRL0(plan.current)} <span class="muted" style="font-size:13px; font-weight:500">de ${fmtBRL0(plan.goal)}</span></div>
+            <div class="meter" style="margin:8px 0 6px"><div style="width:${plan.pct}%"></div></div>
+            <div class="muted" style="font-size:12.5px">Faltam ${fmtBRL0(plan.goal - plan.current)} · Aporte sugerido: <b>${fmtBRL0(plan.pmt)}/mês</b></div>
+          </div>
+        </div>
+        <button class="panel-link" data-goto="plano">Ver plano da meta →</button>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <div class="panel-head"><h3>Insights da carteira</h3></div>
+        ${investInsights(s, alloc)}
+        <button class="panel-link" id="btnInvestAI" ${hasAIKey() ? "" : "disabled"}>Ver análise completa →</button>
+      </div>
+    </div>
+  </div>
+
+  ${INVEST.length ? `<div class="insight-banner">
+    <span class="ib-ic">${icon("sparkles")}</span>
+    <div class="ib-b"><div class="ib-t">Projeção</div><div class="ib-d">${investProjection(plan)}</div></div>
+    <button class="btn" data-goto="plano">Ver plano completo</button>
+  </div>` : ""}`;
+}
+
+function assetIcon(t) {
+  const m = { "Renda fixa":"coins","Tesouro":"shield","FIIs":"home","Ações BR":"trend-up","Ações/ETF exterior":"trend-up","Cripto":"bolt","Fundo":"pie","Outros":"coins" };
+  return m[t] || "coins";
+}
+function allocDonut(items) {
+  const total = items.reduce((a, [, v]) => a + v, 0);
+  const cols = ["var(--s1)", "var(--s7)", "var(--s3)", "var(--s8)", "var(--s6)", "var(--s4)", "var(--s5)", "var(--baseline)"];
+  const cx = 80, cy = 80, R = 72, r = 48; let a0 = -90, paths = "";
+  items.forEach(([, v], i) => {
+    const a1 = a0 + v / total * 360, large = (a1 - a0) > 180 ? 1 : 0;
+    const [x0, y0] = polar(cx, cy, R, a0), [x1, y1] = polar(cx, cy, R, a1), [x2, y2] = polar(cx, cy, r, a1), [x3, y3] = polar(cx, cy, r, a0);
+    paths += `<path d="M${x0.toFixed(1)} ${y0.toFixed(1)} A${R} ${R} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)} L${x2.toFixed(1)} ${y2.toFixed(1)} A${r} ${r} 0 ${large} 0 ${x3.toFixed(1)} ${y3.toFixed(1)} Z" fill="${cols[i % cols.length]}" stroke="var(--surface-1)" stroke-width="2.5"/>`;
+    a0 = a1;
+  });
+  const donut = `<svg viewBox="0 0 160 160" width="150" height="150" style="flex-shrink:0">${paths}
+    <text x="80" y="78" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink-1)">${fmtBRL0(total)}</text>
+    <text x="80" y="93" text-anchor="middle" font-size="10" fill="var(--ink-3)">Total investido</text></svg>`;
+  const legend = `<div class="donut-legend">${items.map(([c, v], i) => `
+    <div class="dl-row" style="display:grid">
+      <span class="dl-dot" style="background:${cols[i % cols.length]}"></span>
+      <span style="text-align:left">${esc(c)}</span>
+      <span class="dl-val">${fmtBRL0(v)}</span>
+      <span class="dl-pct">${(v / total * 100).toFixed(1)}%</span>
+    </div>`).join("")}</div>`;
+  return `<div class="flex" style="gap:14px; align-items:center; flex-wrap:wrap; justify-content:center">${donut}${legend}</div>`;
+}
+function ringGauge(pct) {
+  const r = 40, c = 2 * Math.PI * r, off = c * (1 - Math.min(100, pct) / 100);
+  return `<svg viewBox="0 0 92 92" width="92" height="92">
+    <circle cx="46" cy="46" r="${r}" fill="none" stroke="var(--grid)" stroke-width="9"/>
+    <circle cx="46" cy="46" r="${r}" fill="none" stroke="var(--accent)" stroke-width="9" stroke-linecap="round"
+      stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 46 46)"/></svg>`;
+}
+function investInsights(s, alloc) {
+  const out = [];
+  const streak = investStreak();
+  if (streak >= 2) out.push(`<div class="inv-insight good"><span class="ii-ic">${icon("check")}</span>
+    <div class="ii-b"><div class="ii-t">Consistência de aportes</div><div class="ii-d">${streak} meses seguidos investindo. Continue assim!</div></div></div>`);
+  if (alloc.length) { const total = alloc.reduce((a, [, v]) => a + v, 0); const [c, v] = alloc[0];
+    out.push(`<div class="inv-insight star"><span class="ii-ic">${icon("target")}</span>
+      <div class="ii-b"><div class="ii-t">Maior posição</div><div class="ii-d">${esc(c)} representa ${(v/total*100).toFixed(0)}% da sua carteira${v/total>0.5?" — considere diversificar":""}.</div></div></div>`); }
+  const rf = new Set(["Renda fixa", "Tesouro"]);
+  const rfVal = alloc.filter(([c]) => rf.has(c)).reduce((a, [, v]) => a + v, 0);
+  const rvVal = alloc.filter(([c]) => !rf.has(c)).reduce((a, [, v]) => a + v, 0);
+  if (alloc.length >= 2) out.push(`<div class="inv-insight div"><span class="ii-ic">${icon("pie")}</span>
+    <div class="ii-b"><div class="ii-t">Diversificação</div><div class="ii-d">${rvVal > 0 && rfVal > 0 ? "Carteira distribuída entre renda fixa e variável." : "Concentrada em " + (rfVal >= rvVal ? "renda fixa" : "renda variável") + " — avalie diversificar."}</div></div></div>`);
+  return out.join("") || `<div class="muted" style="font-size:13px">Registre mais aportes para gerar insights.</div>`;
+}
+function investEvolutionChart(months) {
+  const data = investSeries(months);
+  const n = data.length;
+  const maxV = Math.max(1, ...data.map(d => d.patrimonio));
+  const W = 640, H = 300, padL = 46, padB = 26, padT = 10, padR = 12;
+  const plotH = H - padB - padT, plotW = W - padL - padR;
+  const x = i => padL + (n <= 1 ? plotW / 2 : i / (n - 1) * plotW);
+  const y = v => padT + plotH - v / maxV * plotH;
+  const step = niceStep(maxV);
+  let grid = "";
+  for (let g = 0; g <= maxV; g += step) grid += `<line x1="${padL}" x2="${W - padR}" y1="${y(g)}" y2="${y(g)}" stroke="var(--grid)"/><text x="${padL - 6}" y="${y(g)+3}" font-size="9.5" fill="var(--ink-3)" text-anchor="end">${g === 0 ? "R$ 0" : "R$ " + compact(g)}</text>`;
+  const mkLine = (key, color) => data.map((d, i) => (i ? "L" : "M") + x(i).toFixed(1) + "," + y(d[key]).toFixed(1)).join(" ");
+  const patrimPath = mkLine("patrimonio", "var(--s1)");
+  const area = patrimPath + ` L${x(n - 1).toFixed(1)},${y(0)} L${x(0).toFixed(1)},${y(0)} Z`;
+  const dot = (key, color) => data.map((d, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(d[key]).toFixed(1)}" r="2.6" fill="${color}" stroke="var(--surface-1)" stroke-width="1.5"/>`).join("");
+  const hover = data.map((d, i) => {
+    const bw = plotW / n;
+    return `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${padT}" width="${bw.toFixed(1)}" height="${plotH}" fill="transparent" class="has-tipm" data-tipm="${monthLabel(d.mk)}||Patrimônio:${d.patrimonio.toFixed(0)}||Aportes:${d.aportes.toFixed(0)}||Rendimento:${d.rend.toFixed(0)}"/>`;
+  }).join("");
+  const xlabels = data.map((d, i) => (n <= 8 || i % 2 === 0) ? `<text x="${x(i).toFixed(1)}" y="${H - 8}" font-size="9.5" fill="var(--ink-3)" text-anchor="middle">${monthLabel(d.mk)}</text>` : "").join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto" role="img" aria-label="Evolução do patrimônio">
+    ${grid}
+    <path d="${area}" fill="var(--s1)" opacity=".08"/>
+    <path d="${mkLine("aportes")}" fill="none" stroke="var(--good)" stroke-width="2" stroke-linejoin="round"/>
+    <path d="${mkLine("rend")}" fill="none" stroke="var(--s7)" stroke-width="2" stroke-linejoin="round"/>
+    <path d="${patrimPath}" fill="none" stroke="var(--s1)" stroke-width="2.5" stroke-linejoin="round"/>
+    ${dot("aportes","var(--good)")}${dot("rend","var(--s7)")}${dot("patrimonio","var(--s1)")}
+    ${xlabels}${hover}</svg>`;
+}
+
+async function investAnaliseIA() {
+  openModal(`<h3>Análise da carteira com IA</h3><div class="ai-box loading-dots" id="invAIout">Analisando sua carteira</div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  const s = investStats(), alloc = investAllocation();
+  const carteira = alloc.map(([c, v]) => `${c}: ${fmtBRL0(v)} (${(v / (s.patrimonio || 1) * 100).toFixed(0)}%)`).join("; ");
+  try {
+    const reply = await callClaude({
+      maxTokens: 1400,
+      system: SYSTEM_ADVISOR + "\n\n" + financialContext(),
+      messages: [{ role: "user", content: `Minha carteira de investimentos: patrimônio ${fmtBRL0(s.patrimonio)}, rentabilidade acumulada ${fmtBRL0(s.rend)} (${s.rentPct.toFixed(1)}%). Alocação: ${carteira || "vazia"}. Em texto curto: avalie a diversificação, aponte concentração de risco, e sugira o próximo passo de aporte considerando minha meta. Sem recomendar ativos específicos obscuros.` }]
+    });
+    const box = $("#invAIout"); if (box) { box.classList.remove("loading-dots"); box.textContent = ""; box.innerHTML = esc(reply); }
+  } catch (e) { const box = $("#invAIout"); if (box) { box.classList.remove("loading-dots"); box.innerHTML = "⚠️ " + esc(e.message); } }
+}
+
+function investProjection(plan) {
+  const next = 0.20; // próximo marco: 20% da meta
+  if (plan.pmt <= 0 || plan.rate < 0) return "Continue aportando com consistência para acelerar sua meta.";
+  const target = plan.goal * next;
+  if (plan.current >= target) return `Você já passou de ${(next*100).toFixed(0)}% da meta. Próximo marco: ${(30)}% — mantenha o ritmo!`;
+  // meses p/ atingir 20% com aportes constantes e juros compostos
+  const r = plan.rate, fvNeeded = target;
+  let m = 0, val = plan.current;
+  while (val < fvNeeded && m < 600) { val = val * (1 + r) + plan.pmt; m++; }
+  return `Se você mantiver o ritmo atual de aportes, pode atingir <b>${(next*100).toFixed(0)}% da meta</b> em aproximadamente <b>${m} meses</b>.`;
 }
 
 // ============================================================
@@ -2056,12 +2246,15 @@ function modalInvest() {
     <div class="form-row">
       <div class="field"><label>Tipo de ativo</label><select id="iType">
         ${["Renda fixa","Tesouro","FIIs","Ações BR","Ações/ETF exterior","Cripto","Fundo","Outros"].map(x => `<option>${x}</option>`).join("")}</select></div>
-      <div class="field"><label>Operação</label><select id="iOp"><option value="aporte">Aporte</option><option value="resgate">Resgate</option></select></div>
+      <div class="field"><label>Operação</label><select id="iOp">
+        <option value="aporte">Aporte</option><option value="rendimento">Rendimento</option>
+        <option value="dividendo">Dividendo</option><option value="resgate">Resgate</option></select></div>
     </div>
     <div class="form-row">
       <div class="field"><label>Valor (R$)</label><input id="iAmount" inputmode="decimal" placeholder="0,00"></div>
       <div class="field"><label>Data</label><input id="iDate" type="date" value="${todayISO()}"></div>
     </div>
+    <div class="field"><label>Conta (opcional)</label><input id="iConta" placeholder="Ex.: Conta Investimentos, XP, NuInvest"></div>
     <div class="modal-actions">
       <button class="btn secondary" id="mCancel">Cancelar</button>
       <button class="btn" id="mSave">Registrar</button>
@@ -2073,7 +2266,7 @@ function modalInvest() {
     try {
       await addDoc(collection(db, "households", hid, "investments"), {
         name: $("#iName").value.trim(), assetType: $("#iType").value, type: $("#iOp").value,
-        amount, date: $("#iDate").value || todayISO(), createdBy: user.email
+        amount, date: $("#iDate").value || todayISO(), conta: $("#iConta").value.trim() || "Conta Investimentos", createdBy: user.email
       });
       closeModal(); toast("📈 Registrado!");
     } catch (e) { toast("Erro: " + e.message); }
@@ -2354,6 +2547,8 @@ function attachHandlers() {
 
   // investimentos
   $("#btnAddInv") && ($("#btnAddInv").onclick = modalInvest);
+  $("#btnAddInv2") && ($("#btnAddInv2").onclick = modalInvest);
+  $("#btnInvestAI") && ($("#btnInvestAI").onclick = investAnaliseIA);
   document.querySelectorAll("[data-del-inv]").forEach(b => b.onclick = async () => {
     if (confirm("Excluir este registro?")) await deleteDoc(doc(db, "households", hid, "investments", b.dataset.delInv));
   });
@@ -2496,6 +2691,18 @@ function attachHandlers() {
       tip.innerHTML = `<div class="t-title">${esc(title)}</div><div class="t-row">${esc(series)}<b>${fmtBRL(+val)}</b></div>`;
       tip.style.display = "block";
       tip.style.left = Math.min(e.clientX + 14, innerWidth - 200) + "px";
+      tip.style.top = (e.clientY + 14) + "px";
+    });
+    el.addEventListener("mouseleave", () => tip.style.display = "none");
+  });
+  // tooltip múltiplo (gráfico de evolução)
+  document.querySelectorAll(".has-tipm").forEach(el => {
+    el.addEventListener("mousemove", e => {
+      const parts = el.dataset.tipm.split("||");
+      const rows = parts.slice(1).map(p => { const [s, v] = p.split(":"); return `<div class="t-row">${esc(s)}<b>${fmtBRL(+v)}</b></div>`; }).join("");
+      tip.innerHTML = `<div class="t-title">${esc(parts[0])}</div>${rows}`;
+      tip.style.display = "block";
+      tip.style.left = Math.min(e.clientX + 14, innerWidth - 220) + "px";
       tip.style.top = (e.clientY + 14) + "px";
     });
     el.addEventListener("mouseleave", () => tip.style.display = "none");
