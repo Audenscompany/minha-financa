@@ -493,7 +493,7 @@ function viewDashboard() {
   const cur = sumMonths(mks), prev = sumMonths(prevMks);
   const saldo = cur.ins - cur.outs, prevSaldo = prev.ins - prev.outs;
   const savings = cur.ins > 0 ? (cur.ins - cur.outs) / cur.ins * 100 : null;
-  const invPer = investedInMonths(mks), prevInv = investedInMonths(prevMks);
+  const invPer = investedInMonths(mks), prevInv = investedInMonths(prevMks), invS = investStats();
   const plan = planCalc();
   const u = upcoming(15), f = forecast();
   const alerts = buildAlerts();
@@ -553,11 +553,11 @@ function viewDashboard() {
       <div class="kc-val">${fmtBRL0(u.total)}</div>
       <div class="kc-ctx">${u.count ? u.count + " conta(s)" : "nada a vencer"}</div>
     </div>
-    <div class="kpi-card">
+    <div class="kpi-card" data-goto="investimentos" style="cursor:pointer">
       <div class="badge-ic v">${icon("trend-up")}</div>
-      <div class="kc-label">Investido no período</div>
-      <div class="kc-val">${fmtBRL0(invPer)}</div>
-      <div class="kc-ctx">${p === "mes" ? "meta de aporte: " + fmtBRL0(plan.pmt) : deltaCtx(invPer, prevInv).html}</div>
+      <div class="kc-label">Patrimônio investido</div>
+      <div class="kc-val">${fmtBRL0(invS.patrimonio)}</div>
+      <div class="kc-ctx">${invS.rend > 0 ? `<span class="trend pos">↑ ${invS.rentPct.toFixed(1)}%</span> · ` : ""}${invPer > 0 ? fmtBRL0(invPer) + " no mês" : "meta: " + fmtBRL0(plan.pmt)}</div>
     </div>
     <div class="kpi-card">
       <div class="badge-ic g">${icon("wallet")}</div>
