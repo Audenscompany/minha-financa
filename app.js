@@ -1119,15 +1119,15 @@ function viewCalendario() {
   const today = todayISO();
   const label = first.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 
-  // contas a pagar por dia do mês
-  const pend = pendingBills();
+  // contas a pagar por dia do mês = boletos + parcelas de dívidas ativas
+  const items = [
+    ...pendingBills().filter(b => b.dueDate && monthKey(b.dueDate) === ym),
+    ...debtCalItems(ym)
+  ];
   const byDay = {};
-  for (const b of pend) if (b.dueDate && monthKey(b.dueDate) === ym) {
-    const d = +b.dueDate.split("-")[2];
-    (byDay[d] = byDay[d] || []).push(b);
-  }
-  const monthTotal = pend.filter(b => b.dueDate && monthKey(b.dueDate) === ym).reduce((a, b) => a + b.amount, 0);
-  const overdueTotal = pend.filter(b => b.dueDate && b.dueDate < today).reduce((a, b) => a + b.amount, 0);
+  for (const b of items) { const d = +b.dueDate.split("-")[2]; (byDay[d] = byDay[d] || []).push(b); }
+  const monthTotal = items.reduce((a, b) => a + b.amount, 0);
+  const overdueTotal = items.filter(b => b.dueDate < today).reduce((a, b) => a + b.amount, 0);
 
   const dows = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
   let cells = "";
@@ -1181,23 +1181,52 @@ function viewCalendario() {
     </div>
   </div>`;
 }
+async function payDebtPrompt(d) {
+  if (!d) return;
+  const v = parseMoney(prompt(`Quanto você pagou de "${d.name}"?`, d.monthlyPayment || ""));
+  if (!v) return;
+  const paid = (d.paid || 0) + v;
+  const rest = (d.currentValue ?? d.total) - paid;
+  await updateDoc(doc(db, "households", hid, "debts", d.id), { paid, status: rest <= 0 ? "quitada" : d.status });
+  await addDoc(collection(db, "households", hid, "transactions"), {
+    type: "saida", amount: v, date: todayISO(), desc: "Pagamento dívida: " + d.name,
+    category: "Dívidas", method: "PIX", createdBy: user.email, createdAt: new Date().toISOString()
+  });
+  toast(rest <= 0 ? "🎉 Dívida quitada! Parabéns!" : "Pagamento registrado.");
+}
+// parcelas de dívidas ativas (que ainda NÃO viraram boleto) como eventos do mês
+function debtCalItems(ym) {
+  const withBill = new Set(pendingBills().filter(b => b.debtId).map(b => b.debtId));
+  const [Y, M] = ym.split("-").map(Number);
+  const lastDay = new Date(Y, M, 0).getDate();
+  const out = [];
+  for (const d of DEBTS) {
+    if (d.status === "quitada" || !(d.monthlyPayment > 0) || !d.dueDay || withBill.has(d.id)) continue;
+    const day = Math.min(d.dueDay, lastDay);
+    out.push({ name: d.name, amount: d.monthlyPayment, category: "Dívidas",
+      dueDate: `${ym}-${String(day).padStart(2, "0")}`, debtId: d.id, isDebt: true });
+  }
+  return out;
+}
 function modalDayBills(iso) {
-  const list = pendingBills().filter(b => b.dueDate === iso).sort((a, b) => b.amount - a.amount);
+  const list = [...pendingBills().filter(b => b.dueDate === iso), ...debtCalItems(iso.slice(0, 7)).filter(x => x.dueDate === iso)]
+    .sort((a, b) => b.amount - a.amount);
   const tot = list.reduce((a, b) => a + b.amount, 0);
   const d = new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
   openModal(`
     <h3 style="text-transform:capitalize">${d}</h3>
     <p class="muted" style="margin:-8px 0 14px">${list.length} conta(s) · total ${fmtBRL(tot)}</p>
     <div style="display:flex; flex-direction:column; gap:8px">
-      ${list.map(b => `<div class="flex spread" style="padding:11px 12px; border:1px solid var(--border); border-radius:10px; gap:10px">
-        <div class="inv-asset"><span class="ia-ic">${icon(catIcon(b.category))}</span>
-          <div><b>${esc(b.name)}</b>${b.dda ? ' <span class="chip">DDA</span>' : ""}<div class="muted" style="font-size:12px">${esc(b.category)}</div></div></div>
+      ${list.map((b, i) => `<div class="flex spread" style="padding:11px 12px; border:1px solid var(--border); border-radius:10px; gap:10px">
+        <div class="inv-asset"><span class="ia-ic">${icon(b.isDebt ? "trend-down" : catIcon(b.category))}</span>
+          <div><b>${esc(b.name)}</b>${b.isDebt ? ' <span class="chip">dívida</span>' : b.dda ? ' <span class="chip">DDA</span>' : ""}<div class="muted" style="font-size:12px">${esc(b.category)}</div></div></div>
         <div style="text-align:right"><b>${fmtBRL(b.amount)}</b>
-          <div><button class="btn small" data-pay-bill="${b.id}" style="margin-top:4px">💵 Pagar</button></div></div>
+          <div><button class="btn small" data-day-pay="${i}" style="margin-top:4px">💵 Pagar</button></div></div>
       </div>`).join("")}
     </div>
     <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
   $("#mCancel").onclick = closeModal;
+  list.forEach((b, i) => { const btn = $(`[data-day-pay="${i}"]`); if (btn) btn.onclick = () => { closeModal(); b.isDebt ? payDebtPrompt(DEBTS.find(x => x.id === b.debtId)) : payBill(b); }; });
 }
 
 function viewBoletos() {
@@ -2776,21 +2805,7 @@ function attachHandlers() {
   document.querySelectorAll("[data-del-debt]").forEach(b => b.onclick = async () => {
     if (confirm("Excluir esta dívida?")) await deleteDoc(doc(db, "households", hid, "debts", b.dataset.delDebt));
   });
-  document.querySelectorAll("[data-pay-debt]").forEach(b => b.onclick = async () => {
-    const d = DEBTS.find(x => x.id === b.dataset.payDebt);
-    const v = parseMoney(prompt(`Quanto você pagou de "${d.name}"?`, d.monthlyPayment || ""));
-    if (!v) return;
-    const paid = (d.paid || 0) + v;
-    const rest = (d.currentValue ?? d.total) - paid;
-    await updateDoc(doc(db, "households", hid, "debts", d.id), {
-      paid, status: rest <= 0 ? "quitada" : d.status
-    });
-    await addDoc(collection(db, "households", hid, "transactions"), {
-      type: "saida", amount: v, date: todayISO(), desc: "Pagamento dívida: " + d.name,
-      category: "Dívidas", method: "PIX", createdBy: user.email, createdAt: new Date().toISOString()
-    });
-    toast(rest <= 0 ? "🎉 Dívida quitada! Parabéns!" : "Pagamento registrado.");
-  });
+  document.querySelectorAll("[data-pay-debt]").forEach(b => b.onclick = () => payDebtPrompt(DEBTS.find(x => x.id === b.dataset.payDebt)));
 
   // calendário
   const calM = $("#calMonth");
