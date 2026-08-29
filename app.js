@@ -18,6 +18,7 @@ let currentView = "dashboard";
 let unsubs = [];
 let chatHistory = [];
 let receiptDraft = null;
+let dashPeriod = "mes"; // mes | mesPassado | m3 | m6 | ano
 
 const CATS_OUT_BASE = ["Alimentação","Mercado","Moradia","Contas (água/luz/net)","Transporte","Saúde","Educação","Lazer","Assinaturas","Vestuário","Pet","Dívidas","Impostos/Taxas","Outros"];
 const CATS_IN_BASE = ["Salário/Pró-labore","Vendas","Freelance","Rendimentos","Reembolso","Outros"];
@@ -62,7 +63,9 @@ const ESSENTIAL = new Set(["Mercado","Moradia","Contas (água/luz/net)","Transpo
 const fmtBRL = v => (v ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const fmtBRL0 = v => (v ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 const monthKey = d => d.slice(0, 7); // 'YYYY-MM'
-const todayISO = () => { const d = new Date(); return d.toISOString().slice(0,10); };
+// data LOCAL (evita bug de fuso do toISOString, que é UTC — no BR pulava o dia à noite)
+const isoLocal = d => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; };
+const todayISO = () => isoLocal(new Date());
 const monthLabel = mk => { const [y,m] = mk.split("-"); return ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"][+m-1] + "/" + y.slice(2); };
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const $ = sel => document.querySelector(sel);
@@ -258,121 +261,290 @@ function render() {
 // ============================================================
 // VIEW: DASHBOARD
 // ============================================================
-function viewDashboard() {
-  const mk = todayISO().slice(0, 7);
-  const { ins, outs } = monthTotals(mk);
-  const prev = lastMonths(2)[0];
-  const prevT = monthTotals(prev);
-  const saldo = ins - outs;
-  const dt = debtTotals();
-  const inv = investedTotal();
-  const plan = planCalc();
+// ---------- Período global do dashboard ----------
+const PERIODS = [["mes","Este mês"],["mesPassado","Mês passado"],["m3","3 meses"],["m6","6 meses"],["ano","Este ano"]];
+function periodMonths(p) {
+  const now = new Date(), cur = now.toISOString().slice(0, 7);
+  if (p === "mes") return [todayISO().slice(0, 7)];
+  if (p === "mesPassado") return [lastMonths(2)[0]];
+  if (p === "m3") return lastMonths(3);
+  if (p === "m6") return lastMonths(6);
+  if (p === "ano") { const a = []; for (let m = 0; m <= now.getMonth(); m++) a.push(`${now.getFullYear()}-${String(m+1).padStart(2,"0")}`); return a; }
+  return [cur];
+}
+function prevPeriodMonths(p) {
+  const cur = periodMonths(p);
+  const n = cur.length;
+  const first = cur[0] + "-01";
+  const out = [];
+  for (let i = n; i >= 1; i--) {
+    const d = new Date(first); d.setMonth(d.getMonth() - i);
+    out.push(d.toISOString().slice(0, 7));
+  }
+  return out;
+}
+function sumMonths(mks) {
+  return mks.reduce((a, mk) => { const t = monthTotals(mk); a.ins += t.ins; a.outs += t.outs; return a; }, { ins: 0, outs: 0 });
+}
+function catSpendMonths(mks) {
+  const map = {};
+  for (const t of TX) if (t.type === "saida" && mks.includes(monthKey(t.date))) map[t.category] = (map[t.category] || 0) + t.amount;
+  return Object.entries(map).sort((a, b) => b[1] - a[1]);
+}
+function investedInMonths(mks) {
+  return INVEST.filter(i => mks.includes(monthKey(i.date)) && i.type !== "resgate").reduce((a, i) => a + i.amount, 0);
+}
+function periodLabel(p) { return (PERIODS.find(x => x[0] === p) || [])[1] || "período"; }
 
-  const deltaOut = prevT.outs > 0 ? ((outs - prevT.outs) / prevT.outs * 100) : null;
+// delta com tratamento de base zero / primeiro período (item 9)
+function deltaCtx(cur, prev, { goodDown = false } = {}) {
+  if (prev === 0 || prev == null) {
+    if (!cur) return { html: `<span class="trend flat">—</span>` };
+    return { html: `<span class="trend flat">sem base anterior</span>` };
+  }
+  const pct = (cur - prev) / Math.abs(prev) * 100;
+  const isGood = goodDown ? pct <= 0 : pct >= 0;
+  const arrow = pct > 0.5 ? "↑" : pct < -0.5 ? "↓" : "→";
+  const cls = Math.abs(pct) < 0.5 ? "flat" : (isGood ? "pos" : "neg");
+  return { html: `<span class="trend ${cls}">${arrow} ${Math.abs(pct).toFixed(1).replace(".", ",")}%</span> <span class="muted">vs período anterior</span>`, pct };
+}
+function sparkline(vals, accent = "var(--s2)") {
+  if (!vals.length || Math.max(...vals) === 0) return "";
+  const W = 120, H = 30, max = Math.max(...vals, 1), n = vals.length;
+  const x = i => n === 1 ? W / 2 : i / (n - 1) * W;
+  const y = v => H - 3 - v / max * (H - 6);
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  const path = "M" + pts.join(" L");
+  const area = path + ` L${W},${H} L0,${H} Z`;
+  return `<svg class="k-spark" viewBox="0 0 ${W} ${H}" width="120" height="30" aria-hidden="true">
+    <path d="${area}" fill="${accent}" opacity=".10"/>
+    <path d="${path}" fill="none" stroke="${accent}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${x(n-1).toFixed(1)}" cy="${y(vals[n-1]).toFixed(1)}" r="2.6" fill="${accent}"/></svg>`;
+}
+
+function viewDashboard() {
+  const p = dashPeriod;
+  const mks = periodMonths(p), prevMks = prevPeriodMonths(p);
+  const cur = sumMonths(mks), prev = sumMonths(prevMks);
+  const saldo = cur.ins - cur.outs, prevSaldo = prev.ins - prev.outs;
+  const savings = cur.ins > 0 ? (cur.ins - cur.outs) / cur.ins * 100 : null;
+  const invPer = investedInMonths(mks), prevInv = investedInMonths(prevMks);
+  const plan = planCalc();
+  const alerts = buildAlerts();
+  const nome = (user?.displayName || "").split(" ")[0] || "";
+  // sparklines dos últimos 6 meses (contexto de tendência)
+  const spk = lastMonths(6);
+  const sparkOut = spk.map(m => monthTotals(m).outs);
+  const sparkIn = spk.map(m => monthTotals(m).ins);
+  const savingsGoal = SETTINGS.savingsGoalPct ?? 30;
 
   return `
-  <div class="view-head">
-    <div><h2>Dashboard</h2><div class="sub">Visão geral de ${monthLabel(mk)}</div></div>
-    <button class="btn" id="btnQuickAdd">+ Nova transação</button>
+  <div class="dash-head">
+    <div><h2>Olá${nome ? ", " + esc(nome) : ""} 👋</h2>
+      <div class="hello">Sua vida financeira — ${periodLabel(p).toLowerCase()}</div></div>
+    <div class="dash-tools">
+      <div class="seg scroll" id="periodSel">
+        ${PERIODS.map(([k, lbl]) => `<button data-period="${k}" class="${p === k ? "active" : ""}">${lbl}</button>`).join("")}
+      </div>
+      <button class="btn" id="btnQuickAdd">+ Lançar</button>
+    </div>
   </div>
 
-  <div class="grid tiles">
-    <div class="card tile"><div class="label">Saldo do mês</div>
-      <div class="value" style="color:${saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(saldo)}</div>
-      <div class="delta">${ins > 0 ? Math.round(saldo / ins * 100) + "% da renda sobrou" : "sem entradas ainda"}</div></div>
-    <div class="card tile"><div class="label">Entradas</div><div class="value">${fmtBRL(ins)}</div>
-      <div class="delta">meta: ${fmtBRL0(SETTINGS.incomeTarget || 17500)}</div></div>
-    <div class="card tile"><div class="label">Saídas</div><div class="value">${fmtBRL(outs)}</div>
-      <div class="delta ${deltaOut == null ? "" : (deltaOut <= 0 ? "up" : "down")}">${deltaOut == null ? "—" : (deltaOut > 0 ? "+" : "") + deltaOut.toFixed(0) + "% vs mês anterior"}</div></div>
-    <div class="card tile"><div class="label">Dívidas em aberto</div><div class="value">${fmtBRL0(dt.open)}</div>
-      <div class="delta">${fmtBRL0(dt.monthly)}/mês em parcelas</div></div>
-    <div class="card tile"><div class="label">Total investido</div><div class="value">${fmtBRL0(inv)}</div>
-      <div class="delta">${plan.pct.toFixed(1)}% da meta de ${fmtBRL0(plan.goal)}</div></div>
+  <!-- CAMADA 1: situação atual -->
+  <div class="kpi-hero">
+    <div class="kpi hero">
+      <div class="k-label">Resultado ${mks.length > 1 ? "do período" : "do mês"}</div>
+      <div class="k-val" style="color:${saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(saldo)}</div>
+      <div class="k-ctx">${deltaCtx(saldo, prevSaldo).html}</div>
+    </div>
+    <div class="kpi">
+      <div class="k-label">Recebido</div>
+      <div class="k-val">${fmtBRL0(cur.ins)}</div>
+      <div class="k-ctx">${deltaCtx(cur.ins, prev.ins).html}</div>
+      ${p === "mes" ? sparkline(sparkIn, "var(--s1)") : ""}
+    </div>
+    <div class="kpi">
+      <div class="k-label">Gasto</div>
+      <div class="k-val">${fmtBRL0(cur.outs)}</div>
+      <div class="k-ctx">${deltaCtx(cur.outs, prev.outs, { goodDown: true }).html}</div>
+      ${p === "mes" ? sparkline(sparkOut, "var(--s2)") : ""}
+    </div>
   </div>
 
+  <div class="kpi-row section-gap">
+    <div class="kpi">
+      <div class="k-label">Taxa de economia</div>
+      <div class="k-val">${savings == null ? "—" : savings.toFixed(0) + "%"}</div>
+      <div class="k-ctx">${savings == null ? "sem receita no período" : `meta: ${savingsGoal}% ${savings >= savingsGoal ? '<span class="trend pos">✓ batida</span>' : `<span class="muted">(faltam ${(savingsGoal - savings).toFixed(0)} p.p.)</span>`}`}</div>
+    </div>
+    <div class="kpi">
+      <div class="k-label">A vencer (15 dias)</div>
+      ${(() => { const u = upcoming(15); return `<div class="k-val">${fmtBRL0(u.total)}</div><div class="k-ctx">${u.count ? u.count + " conta(s)" : "nada a vencer"}</div>`; })()}
+    </div>
+    <div class="kpi">
+      <div class="k-label">Investido no período</div>
+      <div class="k-val">${fmtBRL0(invPer)}</div>
+      <div class="k-ctx">${p === "mes" ? `meta de aporte: ${fmtBRL0(plan.pmt)}` : deltaCtx(invPer, prevInv).html}</div>
+    </div>
+    ${p === "mes" ? `<div class="kpi">
+      <div class="k-label">Saldo projetado <span title="Estimativa: recebido + receita esperada − gastos − contas a vencer no mês. Não é saldo bancário." style="cursor:help; color:var(--ink-3)">ⓘ</span></div>
+      ${(() => { const f = forecast(); return `<div class="k-val" style="color:${f.saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL0(f.saldo)}</div><div class="k-ctx">estimativa até o fim do mês</div>`; })()}
+    </div>` : ""}
+  </div>
+
+  ${alerts.length ? `<div class="card section-gap">
+    <div class="flex spread" style="margin-bottom:12px"><h3>Precisa da sua atenção</h3></div>
+    <div class="alerts">${alerts.map(alertHTML).join("")}</div>
+  </div>` : ""}
+
+  <!-- CAMADA 2: tendência -->
   <div class="grid two-col section-gap">
     <div class="card chart-card">
-      <h3>Entradas × Saídas</h3>
-      <div class="chart-sub">Últimos 6 meses</div>
+      <h3>Fluxo financeiro</h3>
+      <div class="chart-sub">Entradas, saídas e saldo — ${mks.length > 1 ? "no período" : "últimos 6 meses"}</div>
       <div class="legend">
         <span class="key"><span class="swatch" style="background:var(--s1)"></span>Entradas</span>
         <span class="key"><span class="swatch" style="background:var(--s2)"></span>Saídas</span>
+        <span class="key"><span class="swatch" style="background:var(--s7); border-radius:2px; height:3px"></span>Saldo</span>
       </div>
-      ${chartBars6m()}
+      ${chartFlow(mks.length > 1 ? mks : lastMonths(6))}
     </div>
     <div class="card chart-card">
-      <h3>Gastos por categoria</h3>
-      <div class="chart-sub">${monthLabel(mk)}</div>
-      ${chartCats(mk)}
+      <h3>Para onde foi seu dinheiro</h3>
+      <div class="chart-sub">${mks.length > 1 ? periodLabel(p) : monthLabel(mks[0])} · toque numa categoria para ver as transações</div>
+      ${chartCats(mks)}
     </div>
   </div>
 
+  ${p === "mes" ? forecastBlock() : ""}
+
+  <!-- CAMADA 5: metas -->
   <div class="card section-gap">
     <div class="flex spread">
-      <div><h3>🎯 Caminho para ${fmtBRL0(plan.goal)}</h3>
-      <div class="chart-sub">Faltam ${plan.monthsLeft} meses · aporte necessário: <b>${fmtBRL0(plan.pmt)}/mês</b></div></div>
-      <button class="btn secondary small" data-goto="plano">Ver plano completo →</button>
+      <div><h3>Meta patrimonial</h3>
+      <div class="chart-sub">Faltam ${plan.monthsLeft} meses · aporte necessário <b>${fmtBRL0(plan.pmt)}/mês</b></div></div>
+      <button class="btn secondary small" data-goto="plano">Ver plano →</button>
     </div>
-    <div class="meter good" style="margin-top:6px"><div style="width:${plan.pct}%"></div></div>
-    <div class="muted" style="margin-top:6px">${fmtBRL0(plan.current)} acumulados de ${fmtBRL0(plan.goal)}</div>
+    <div class="flex spread" style="align-items:flex-end; margin:8px 0 6px">
+      <div style="font-size:22px; font-weight:650">${fmtBRL0(plan.current)} <span class="muted" style="font-size:14px; font-weight:500">de ${fmtBRL0(plan.goal)}</span></div>
+      <div style="font-weight:650; color:var(--accent)">${plan.pct.toFixed(1)}%</div>
+    </div>
+    <div class="meter good"><div style="width:${plan.pct}%"></div></div>
   </div>
 
-  ${dashUpcomingBills()}
-
   <div class="card section-gap">
-    <h3>Últimas transações</h3>
+    <div class="flex spread"><h3>Últimas transações</h3>
+      <button class="btn secondary small" data-goto="transacoes">Ver extrato →</button></div>
     ${tableTx(TX.slice(0, 6), false)}
   </div>`;
 }
 
-function dashUpcomingBills() {
+// ---- A vencer / previsão / alertas ----
+function upcoming(days) {
   const today = todayISO();
-  const limit = new Date(); limit.setDate(limit.getDate() + 15);
-  const lim = limit.toISOString().slice(0, 10);
-  const soon = pendingBills().filter(b => b.dueDate <= lim).slice(0, 5);
-  if (!soon.length) return "";
+  const lim = new Date(); lim.setDate(lim.getDate() + days);
+  const limISO = isoLocal(lim);
+  const list = pendingBills().filter(b => b.dueDate && b.dueDate <= limISO);
+  return { list, count: list.length, total: list.reduce((a, b) => a + b.amount, 0) };
+}
+function forecast() {
+  const mk = todayISO().slice(0, 7);
+  const t = monthTotals(mk);
+  const target = SETTINGS.incomeTarget || avgIncome();
+  const receitaEsperada = Math.max(0, target - t.ins);         // o que ainda deve entrar
+  const receitaPrevista = t.ins + receitaEsperada;
+  const hoje = todayISO();
+  const aVencerNoMes = pendingBills().filter(b => b.dueDate && monthKey(b.dueDate) === mk && b.dueDate >= hoje)
+    .reduce((a, b) => a + b.amount, 0);
+  const gastosPrevistos = t.outs + aVencerNoMes;
+  return { receitaRecebida: t.ins, receitaEsperada, receitaPrevista, gastosRealizados: t.outs, aVencerNoMes, gastosPrevistos, saldo: receitaPrevista - gastosPrevistos };
+}
+function forecastBlock() {
+  const f = forecast();
   return `<div class="card section-gap">
-    <div class="flex spread"><h3>📄 Próximos vencimentos</h3>
-      <button class="btn secondary small" data-goto="boletos">Ver todos →</button></div>
-    <div class="table-wrap"><table><tbody>
-    ${soon.map(b => {
-      const isOver = b.dueDate < today, isToday = b.dueDate === today;
-      return `<tr>
-      <td style="white-space:nowrap"><span class="badge ${isOver ? "crit" : isToday ? "warn" : "good"}">${isOver ? "⛔ venceu" : isToday ? "hoje" : b.dueDate.split("-").reverse().slice(0,2).join("/")}</span></td>
-      <td>${esc(b.name)}${b.dda ? ' <span class="chip">DDA</span>' : ""}</td>
-      <td class="num">${fmtBRL(b.amount)}</td></tr>`;}).join("")}
-    </tbody></table></div></div>`;
+    <div class="flex spread" style="margin-bottom:10px"><h3>Previsão do mês</h3>
+      <span class="muted">estimativa</span></div>
+    <div class="forecast-row">
+      <div class="fc"><div class="fc-l">Receita prevista</div><div class="fc-v">${fmtBRL0(f.receitaPrevista)}</div>
+        <div class="muted" style="font-size:12px; margin-top:2px">${fmtBRL0(f.receitaRecebida)} recebidos${f.receitaEsperada > 0 ? " + " + fmtBRL0(f.receitaEsperada) + " esperados" : ""}</div></div>
+      <div class="fc"><div class="fc-l">Gastos previstos</div><div class="fc-v">${fmtBRL0(f.gastosPrevistos)}</div>
+        <div class="muted" style="font-size:12px; margin-top:2px">${fmtBRL0(f.gastosRealizados)} gastos${f.aVencerNoMes > 0 ? " + " + fmtBRL0(f.aVencerNoMes) + " a vencer" : ""}</div></div>
+      <div class="fc" style="border-color:${f.saldo >= 0 ? "var(--good)" : "var(--critical)"}">
+        <div class="fc-l">Saldo projetado</div>
+        <div class="fc-v" style="color:${f.saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL0(f.saldo)}</div>
+        <div class="muted" style="font-size:12px; margin-top:2px">projeção até o fim do mês</div></div>
+    </div>
+  </div>`;
+}
+function buildAlerts() {
+  const out = [];
+  const today = todayISO();
+  // CRÍTICO: contas vencidas
+  const overdue = pendingBills().filter(b => b.dueDate && b.dueDate < today);
+  if (overdue.length) out.push({ level: "crit", ico: "!", title: `${overdue.length} conta(s) vencida(s)`,
+    desc: `${fmtBRL(overdue.reduce((a, b) => a + b.amount, 0))} em atraso — o mais antigo venceu ${overdue[0].dueDate.split("-").reverse().slice(0,2).join("/")}`, goto: "boletos", act: "Ver" });
+  // ALERTA: orçamento estourado / perto do limite
+  const mk = today.slice(0, 7), spent = Object.fromEntries(catSpend(mk));
+  const budgets = getBudgets();
+  const estourou = budgets.filter(([c, l]) => (spent[c] || 0) > l).sort((a, b) => (spent[b[0]] - b[1]) - (spent[a[0]] - a[1]));
+  const perto = budgets.filter(([c, l]) => (spent[c] || 0) <= l && (spent[c] || 0) / l >= 0.85);
+  if (estourou.length) { const [c, l] = estourou[0]; out.push({ level: "warn", ico: "!", title: `Orçamento estourado: ${c}`,
+    desc: `${fmtBRL(spent[c])} de ${fmtBRL(l)} (${((spent[c]/l-1)*100).toFixed(0)}% acima)${estourou.length>1?` · +${estourou.length-1} categoria(s)`:""}`, goto: "orcamento", act: "Ver" }); }
+  else if (perto.length) { const [c, l] = perto[0]; out.push({ level: "warn", ico: "!", title: `Orçamento perto do limite: ${c}`,
+    desc: `${fmtBRL(spent[c])} de ${fmtBRL(l)} (${(spent[c]/l*100).toFixed(0)}%)`, goto: "orcamento", act: "Ver" }); }
+  // ATENÇÃO: aporte abaixo do planejado
+  const plan = planCalc(), invMes = investedInMonths([mk]);
+  const dayOfMonth = new Date().getDate();
+  if (dayOfMonth >= 20 && plan.pmt > 0 && invMes < plan.pmt * 0.9) out.push({ level: "info", ico: "i", title: "Aporte abaixo do planejado",
+    desc: `${fmtBRL0(invMes)} investidos de ${fmtBRL0(plan.pmt)} planejados neste mês`, goto: "investimentos", act: "Revisar" });
+  // POSITIVO: gastos caíram vs mês anterior
+  const prevMk = lastMonths(2)[0], out0 = monthTotals(mk).outs, prevOut = monthTotals(prevMk).outs;
+  if (prevOut > 0 && out0 < prevOut * 0.9 && new Date().getDate() >= 25) out.push({ level: "pos", ico: "✓", title: "Gastos em queda",
+    desc: `Despesas ${((1 - out0 / prevOut) * 100).toFixed(0)}% menores que ${monthLabel(prevMk)}`, goto: "transacoes", act: "Ver" });
+  const order = { crit: 0, warn: 1, info: 2, pos: 3 };
+  return out.sort((a, b) => order[a.level] - order[b.level]).slice(0, 4);
+}
+function alertHTML(a) {
+  return `<div class="alert-item ${a.level}">
+    <div class="a-ico" aria-hidden="true"><b>${a.ico}</b></div>
+    <div class="a-body"><div class="a-title">${esc(a.title)}</div><div class="a-desc">${esc(a.desc)}</div></div>
+    <button class="btn secondary small a-act" data-goto="${a.goto}">${esc(a.act)}</button>
+  </div>`;
 }
 
-// ---- Gráfico: barras 6 meses (SVG) ----
-function chartBars6m() {
-  const mks = lastMonths(6);
-  const data = mks.map(mk => ({ mk, ...monthTotals(mk) }));
-  const max = Math.max(1, ...data.flatMap(d => [d.ins, d.outs]));
-  const W = 460, H = 210, padL = 8, padB = 26, padT = 10;
+// ---- Gráfico de fluxo: barras entradas/saídas + linha de saldo (SVG) ----
+function chartFlow(mks) {
+  const data = mks.map(mk => { const t = monthTotals(mk); return { mk, ins: t.ins, outs: t.outs, saldo: t.ins - t.outs }; });
+  const n = data.length;
+  const maxBar = Math.max(1, ...data.flatMap(d => [d.ins, d.outs]));
+  const minSaldo = Math.min(0, ...data.map(d => d.saldo)), maxSaldo = Math.max(0, ...data.map(d => d.saldo));
+  const W = 480, H = 220, padL = 8, padB = 26, padT = 10;
   const plotH = H - padB - padT;
-  const bandW = (W - padL) / 6;
-  const barW = Math.min(24, bandW / 2 - 8);
-  const y = v => padT + plotH - (v / max * plotH);
-  // gridlines em números redondos
-  const step = niceStep(max);
+  const bandW = (W - padL) / n;
+  const barW = Math.min(22, bandW / 2 - 6);
+  const y = v => padT + plotH - (v / maxBar * plotH);
+  // escala do saldo (pode ser negativo) mapeada no mesmo plot
+  const sRange = (maxSaldo - minSaldo) || 1;
+  const ys = v => padT + plotH - ((v - minSaldo) / sRange * plotH);
+  const step = niceStep(maxBar);
   let grid = "";
-  for (let g = step; g <= max; g += step) {
-    grid += `<line x1="${padL}" x2="${W}" y1="${y(g)}" y2="${y(g)}" stroke="var(--grid)" stroke-width="1"/>
-    <text x="${padL}" y="${y(g)-4}" font-size="10" fill="var(--ink-3)">${compact(g)}</text>`;
-  }
-  let bars = "";
+  for (let g = step; g <= maxBar; g += step) grid += `<line x1="${padL}" x2="${W}" y1="${y(g)}" y2="${y(g)}" stroke="var(--grid)"/><text x="${padL}" y="${y(g)-4}" font-size="10" fill="var(--ink-3)">${compact(g)}</text>`;
+  let bars = "", saldoPts = [];
   data.forEach((d, i) => {
     const cx = padL + bandW * i + bandW / 2;
-    const x1 = cx - barW - 1, x2 = cx + 1;
-    bars += barRect(x1, y(d.ins), barW, plotH + padT - y(d.ins), "var(--s1)", `${monthLabel(d.mk)}|Entradas|${d.ins}`);
-    bars += barRect(x2, y(d.outs), barW, plotH + padT - y(d.outs), "var(--s2)", `${monthLabel(d.mk)}|Saídas|${d.outs}`);
+    bars += barRect(cx - barW - 1, y(d.ins), barW, plotH + padT - y(d.ins), "var(--s1)", `${monthLabel(d.mk)}|Entradas|${d.ins}`);
+    bars += barRect(cx + 1, y(d.outs), barW, plotH + padT - y(d.outs), "var(--s2)", `${monthLabel(d.mk)}|Saídas|${d.outs}`);
     bars += `<text x="${cx}" y="${H - 8}" font-size="11" fill="var(--ink-3)" text-anchor="middle">${monthLabel(d.mk)}</text>`;
+    saldoPts.push([cx, ys(d.saldo)]);
   });
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto" role="img" aria-label="Entradas e saídas por mês">
+  const line = saldoPts.map((pt, i) => (i ? "L" : "M") + pt[0].toFixed(1) + "," + pt[1].toFixed(1)).join(" ");
+  const dots = saldoPts.map((pt, i) => `<circle cx="${pt[0].toFixed(1)}" cy="${pt[1].toFixed(1)}" r="3" fill="var(--s7)" stroke="var(--surface-1)" stroke-width="2" class="has-tip" data-tip="${monthLabel(data[i].mk)}|Saldo|${data[i].saldo}"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto" role="img" aria-label="Entradas, saídas e saldo por mês">
     ${grid}
-    <line x1="${padL}" x2="${W}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="var(--baseline)" stroke-width="1"/>
-    ${bars}</svg>`;
+    <line x1="${padL}" x2="${W}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="var(--baseline)"/>
+    ${bars}
+    ${n > 1 ? `<path d="${line}" fill="none" stroke="var(--s7)" stroke-width="2" stroke-linejoin="round"/>` : ""}
+    ${dots}</svg>`;
 }
 function barRect(x, y, w, h, fill, tip) {
   if (h <= 0) return "";
@@ -388,18 +560,36 @@ function niceStep(max) {
 }
 const compact = v => v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1e3 ? Math.round(v/1e3)+"k" : Math.round(v);
 
-// ---- Gráfico: categorias (barras horizontais) ----
-function chartCats(mk) {
-  const cats = catSpend(mk).slice(0, 7);
-  if (!cats.length) return `<div class="empty"><span class="big">🍃</span>Nenhum gasto registrado neste mês.</div>`;
+// ---- Gráfico: categorias clicável (drill-down) ----
+function chartCats(mks) {
+  const cats = catSpendMonths(mks).slice(0, 8);
+  if (!cats.length) return `<div class="empty"><span class="big">🍃</span>Nenhum gasto registrado neste período.</div>`;
   const max = cats[0][1];
   return `<div style="display:flex; flex-direction:column; gap:9px; margin-top:4px">` + cats.map(([c, v]) => `
-    <div>
+    <button class="cat-row" data-cat-detail="${esc(c)}" aria-label="Ver transações de ${esc(c)}">
       <div class="flex spread" style="font-size:13px; margin-bottom:3px">
         <span style="color:var(--ink-2)">${esc(c)}</span><b style="font-variant-numeric:tabular-nums">${fmtBRL0(v)}</b>
       </div>
       <div class="meter"><div style="width:${(v/max*100).toFixed(1)}%; background:var(--s2)"></div></div>
-    </div>`).join("") + `</div>`;
+    </button>`).join("") + `</div>`;
+}
+function modalCatDetail(cat) {
+  const mks = periodMonths(dashPeriod);
+  const rows = TX.filter(t => t.type === "saida" && t.category === cat && mks.includes(monthKey(t.date)))
+    .sort((a, b) => b.amount - a.amount);
+  const total = rows.reduce((a, t) => a + t.amount, 0);
+  openModal(`
+    <h3>${esc(cat)} · ${fmtBRL(total)}</h3>
+    <p class="muted" style="margin:-8px 0 14px">${rows.length} transação(ões) em ${periodLabel(dashPeriod).toLowerCase()} — as maiores primeiro</p>
+    ${rows.length ? `<div class="table-wrap" style="max-height:52vh; overflow-y:auto"><table>
+      <thead><tr><th>Data</th><th>Descrição</th><th class="num">Valor</th></tr></thead>
+      <tbody>${rows.map(t => `<tr>
+        <td style="white-space:nowrap">${t.date.split("-").reverse().slice(0,2).join("/")}</td>
+        <td>${esc(t.desc || "—")}${t.aiRead ? " 🤖" : ""}</td>
+        <td class="num">${fmtBRL(t.amount)}</td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty">Nenhuma transação.</div>`}
+    <div class="modal-actions"><button class="btn" id="mCancel">Fechar</button></div>`);
+  $("#mCancel").onclick = closeModal;
 }
 
 // ============================================================
@@ -558,7 +748,7 @@ function addMonthISO(iso) {
   const [y, m, d] = iso.split("-").map(Number);
   const last = new Date(y, m + 1, 0).getDate(); // último dia do mês seguinte
   const day = Math.min(d, last);
-  return new Date(y, m, day).toISOString().slice(0, 10);
+  return isoLocal(new Date(y, m, day));
 }
 function billTimesLabel(b) {
   if (!b.recurring) return "única";
@@ -1354,7 +1544,7 @@ function modalDebt(d = null) {
           const now = new Date();
           const firstDue = new Date(now.getFullYear(), now.getMonth() + (now.getDate() > dd ? 1 : 0), dd);
           await addDoc(collection(db, "households", hid, "bills"), {
-            name, amount: monthly, dueDate: firstDue.toISOString().slice(0, 10), category: "Dívidas",
+            name, amount: monthly, dueDate: isoLocal(firstDue), category: "Dívidas",
             recurring: n > 1, totalTimes: n > 1 ? n : null, paidTimes: 0, dda: false,
             status: "pendente", debtId, createdBy: user.email
           });
@@ -1368,7 +1558,7 @@ function modalDebt(d = null) {
 
 function modalNegotiate(d) {
   const restante = Math.max(0, (d.currentValue ?? d.total) - (d.paid || 0));
-  const nextMonth10 = (() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth() + 1, 10).toISOString().slice(0, 10); })();
+  const nextMonth10 = (() => { const t = new Date(); return isoLocal(new Date(t.getFullYear(), t.getMonth() + 1, 10)); })();
   openModal(`
     <h3>🤝 Negociar — ${esc(d.name)}</h3>
     <p class="muted" style="margin:-8px 0 14px">Valor em aberto hoje: <b>${fmtBRL(restante)}</b>. Preencha as condições fechadas com o credor — o acordo vira parcelas em Boletos & Contas e cada pagamento abate esta dívida automaticamente.</p>
@@ -1665,6 +1855,10 @@ function attachHandlers() {
   // navegação interna
   document.querySelectorAll("[data-goto]").forEach(b => b.onclick = e => { e.preventDefault(); switchView(b.dataset.goto); });
   $("#btnQuickAdd") && ($("#btnQuickAdd").onclick = () => modalTx());
+
+  // dashboard: seletor de período global + drill-down de categoria
+  document.querySelectorAll("[data-period]").forEach(b => b.onclick = () => { dashPeriod = b.dataset.period; render(); });
+  document.querySelectorAll("[data-cat-detail]").forEach(b => b.onclick = () => modalCatDetail(b.dataset.catDetail));
 
   // transações
   const fMonth = $("#fMonth");
