@@ -93,7 +93,25 @@ const ICONS = {
   lightbulb: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.3 1 2.5h6c0-1.2.3-1.8 1-2.5A6 6 0 0 0 12 3Z"/>',
   activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
   shield: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6Z"/><path d="M9 12l2 2 4-4"/>',
+  cart: '<circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h2.2l2.3 12.4a1.5 1.5 0 0 0 1.5 1.2h9a1.5 1.5 0 0 0 1.5-1.2L21 7H5.3"/>',
+  car: '<path d="M4 12l1.6-4.4A2 2 0 0 1 7.5 6h9a2 2 0 0 1 1.9 1.6L20 12"/><path d="M3 12h18v5H3z"/><circle cx="7" cy="17.5" r="1.3"/><circle cx="17" cy="17.5" r="1.3"/>',
+  shirt: '<path d="M8 3l4 3 4-3 4 4-3 2v11H7V9L4 7Z"/>',
+  card: '<rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 10h19"/>',
+  fork: '<path d="M6 3v7a2 2 0 0 0 4 0V3"/><path d="M8 10v11"/><path d="M17 3c-1.7 0-3 2-3 5s1 4 2 4v9"/>',
+  paw: '<circle cx="8" cy="9" r="1.6"/><circle cx="16" cy="9" r="1.6"/><circle cx="5.5" cy="13.5" r="1.4"/><circle cx="18.5" cy="13.5" r="1.4"/><path d="M12 13c-2.5 0-4 1.8-4 3.6C8 18.4 9.5 19 12 19s4-.6 4-2.4C16 14.8 14.5 13 12 13Z"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 9h17M8 3v4M16 3v4"/>',
+  book: '<path d="M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 0-2 2Z"/><path d="M5 4v16"/>',
+  bolt: '<path d="M13 2 4 14h6l-1 8 9-12h-6Z"/>',
+  alert: '<path d="M12 3l9 16H3Z"/><path d="M12 10v4M12 17h.01"/>',
+  check: '<path d="M5 13l4 4L19 7"/>',
 };
+const CAT_ICON = {
+  "Alimentação":"fork","Mercado":"cart","Moradia":"home","Contas (água/luz/net)":"bolt","Transporte":"car",
+  "Saúde":"heart","Educação":"book","Lazer":"sparkles","Assinaturas":"card","Vestuário":"shirt","Pet":"paw",
+  "Dívidas":"trend-down","Impostos/Taxas":"file","Outros":"more","Dízimo":"heart"
+};
+function catIcon(name) { return CAT_ICON[name] || "coins"; }
 function icon(name, size) {
   const s = size ? ` style="width:${size}px;height:${size}px"` : "";
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"${s}>${ICONS[name] || ""}</svg>`;
@@ -1371,104 +1389,153 @@ function viewOrcamento() {
   const budgets = getBudgets();
   const budgetTotal = budgets.reduce((a, [, v]) => a + v, 0);
   const sobra = renda - fixas - budgetTotal;
-
-  // planejado x real (categorias com limite)
   const spentByCat = Object.fromEntries(catSpend(mk));
   const spentBudgeted = budgets.reduce((a, [c]) => a + (spentByCat[c] || 0), 0);
-
-  // dia do mês para ritmo esperado
-  const now = new Date();
-  const dayOfMonth = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const now = new Date(), dayOfMonth = now.getDate(), daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const monthPct = dayOfMonth / daysInMonth * 100;
-
-  // categorias com gasto no mês SEM limite definido (sugerir criar)
-  const semLimite = catSpend(mk).filter(([c]) => !(SETTINGS.budgets || {})[c] && !ESSENTIAL.has(c)).slice(0, 4);
+  const ordered = [...budgets].sort((a, b) => (spentByCat[b[0]] || 0) / b[1] - (spentByCat[a[0]] || 0) / a[1]);
+  const rowsShown = ordered.slice(0, 7);
 
   return `
   <div class="view-head">
-    <div><h2>Orçamento do mês</h2><div class="sub">O que planejar com sua renda em ${monthLabel(mk)} — e se você está dentro</div></div>
+    <div><h2>Orçamento do mês <span title="Planeje limites por categoria e acompanhe o gasto real." style="color:var(--ink-3); cursor:help; font-size:15px">ⓘ</span></h2>
+      <div class="sub">Planeje seus gastos e acompanhe em tempo real</div></div>
     <div class="flex">
-      <button class="btn secondary" id="btnBudgetAI" ${hasAIKey() ? "" : "disabled"}>🤖 Sugerir com IA</button>
-      <button class="btn" id="btnSetBudgets">Definir limites</button>
+      <button class="btn secondary" id="btnBudgetAI" ${hasAIKey() ? "" : "disabled"}><span class="ico" data-ic="sparkles" style="width:16px;height:16px"></span> Sugerir com IA</button>
+      <button class="btn" id="btnSetBudgets"><span class="ico" data-ic="settings" style="width:15px;height:15px"></span> Definir limites</button>
     </div>
   </div>
 
-  <div class="grid tiles">
-    <div class="card tile"><div class="label">Renda planejada</div><div class="value">${fmtBRL(renda)}</div>
-      <div class="delta">ajuste em Configurações</div></div>
-    <div class="card tile"><div class="label">Contas fixas</div><div class="value">${fmtBRL(fixas)}</div>
-      <div class="delta">${fixedBills().length} conta(s) recorrente(s)</div></div>
-    <div class="card tile"><div class="label">Limites de gastos</div><div class="value">${fmtBRL(budgetTotal)}</div>
-      <div class="delta">${budgets.length} categoria(s) com limite</div></div>
-    <div class="card tile"><div class="label">Sobra p/ metas</div>
-      <div class="value" style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</div>
-      <div class="delta">${sobra >= 0 ? "disponível p/ investir/guardar" : "⚠️ orçamento acima da renda"}</div></div>
+  <div class="bkpi-grid">
+    <div class="bkpi"><div class="bk-label">Renda planejada <button class="icon-btn" id="btnSetBudgets2" title="Editar" style="padding:0">${icon("settings", 15)}</button></div>
+      <div class="bk-val" style="color:var(--accent)">${fmtBRL(renda)}</div>
+      <div class="bk-foot"><span class="ico">${icon("wallet")}</span> Ajuste em Configurações</div></div>
+    <div class="bkpi"><div class="bk-label">Contas fixas</div>
+      <div class="bk-val">${fmtBRL(fixas)}</div>
+      <div class="bk-foot"><span class="ico">${icon("calendar")}</span> ${fixedBills().length} conta(s) recorrente(s)</div></div>
+    <div class="bkpi"><div class="bk-label">Limites de gastos</div>
+      <div class="bk-val">${fmtBRL(budgetTotal)}</div>
+      <div class="bk-foot"><span class="ico">${icon("folder")}</span> ${budgets.length} categoria(s) com limite</div></div>
+    <div class="bkpi"><div class="bk-label">Sobra p/ metas</div>
+      <div class="bk-val" style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</div>
+      <div class="bk-foot"><span class="ico">${icon("target")}</span> ${sobra >= 0 ? "Disponível p/ investir/guardar" : "Acima da renda — reveja"}</div></div>
   </div>
 
   <div id="budgetAIBox" class="section-gap hidden"></div>
 
-  <div class="card section-gap">
-    <div class="flex spread" style="margin-bottom:4px">
-      <h3>Planejado × gasto real</h3>
-      <span class="muted">${monthLabel(mk)} · dia ${dayOfMonth}/${daysInMonth}</span>
+  <div class="bud-2col">
+    <div class="panel">
+      <div class="panel-head" style="margin-bottom:8px"><h3>Planejado × gasto real</h3>
+        <span class="muted" style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px">${icon("calendar", 15)} ${monthLabel(mk)} · dia ${dayOfMonth}/${daysInMonth}</span></div>
+      ${budgets.length ? `
+      <div class="flex" style="gap:16px; margin:4px 0 16px; font-size:13.5px; flex-wrap:wrap">
+        <span>Limite total: <b>${fmtBRL(budgetTotal)}</b></span>
+        <span style="color:var(--ink-3)">|</span>
+        <span>Gasto até agora: <b style="color:${spentBudgeted > budgetTotal ? "var(--critical)" : "var(--good-text)"}">${fmtBRL(spentBudgeted)}</b></span>
+        <span style="color:var(--ink-3)">|</span>
+        <span>Restante: <b style="color:var(--accent)">${fmtBRL(Math.max(0, budgetTotal - spentBudgeted))}</b></span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:16px">
+        ${rowsShown.map(([c, limit]) => {
+          const spent = spentByCat[c] || 0, pct = limit ? spent / limit * 100 : 0, lvl = budgetLevel(spent, limit), over = spent > limit;
+          const pill = over ? '<span class="status-pill crit">estourou</span>' : pct >= 85 ? '<span class="status-pill warn">atenção</span>' : '<span class="status-pill good">dentro</span>';
+          return `<button class="bud-row cat-row" data-cat-detail="${esc(c)}" style="text-align:left">
+            <div class="br-head">
+              <span class="br-ic">${icon(catIcon(c))}</span>
+              <span class="br-name">${esc(c)}</span> ${pill}
+              <span class="br-vals">${fmtBRL(spent)} <span class="muted">/ ${fmtBRL(limit)}</span></span>
+            </div>
+            <div class="meter ${lvl}"><div style="width:${Math.min(100, pct).toFixed(1)}%"></div></div>
+            <div class="br-sub">${over ? `passou ${fmtBRL(spent - limit)} do limite` : `restam ${fmtBRL(limit - spent)}`} · ${pct.toFixed(0)}% do limite</div>
+          </button>`;
+        }).join("")}
+      </div>
+      ${ordered.length > 7 ? `<div style="text-align:center; margin-top:14px"><button class="panel-link" id="btnSetBudgets3">Ver todas as categorias</button></div>` : ""}`
+      : `<div class="empty"><span class="big">🧮</span>Você ainda não definiu limites de gastos.<br>Clique em <b>Definir limites</b> ou peça uma <b>sugestão à IA</b>.</div>`}
     </div>
-    ${budgets.length ? `
-    <div class="flex" style="gap:18px; margin:8px 0 14px; font-size:14px; flex-wrap:wrap">
-      <span>Limite total: <b>${fmtBRL(budgetTotal)}</b></span>
-      <span>Gasto até agora: <b style="color:${spentBudgeted > budgetTotal ? "var(--critical)" : "var(--good-text)"}">${fmtBRL(spentBudgeted)}</b></span>
-      <span>Restante: <b>${fmtBRL(Math.max(0, budgetTotal - spentBudgeted))}</b></span>
+
+    <div>
+      <div class="panel">
+        <h3 style="margin-bottom:14px">Distribuição dos gastos</h3>
+        ${budgetDonut([mk])}
+        <button class="btn secondary small" data-goto="transacoes" style="width:100%; justify-content:center; margin-top:14px">Ver análise completa →</button>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h3 style="margin-bottom:14px">Alertas do orçamento</h3>
+        ${budgetAlerts(budgets, spentByCat, budgetTotal, spentBudgeted)}
+      </div>
     </div>
-    <div style="display:flex; flex-direction:column; gap:14px">
-      ${budgets.sort((a,b) => (spentByCat[b[0]]||0)/b[1] - (spentByCat[a[0]]||0)/a[1]).map(([c, limit]) => {
-        const spent = spentByCat[c] || 0;
-        const pct = limit ? spent / limit * 100 : 0;
-        const lvl = budgetLevel(spent, limit);
-        const over = spent > limit;
-        return `<div>
-          <div class="flex spread" style="font-size:14px; margin-bottom:4px">
-            <span><b>${esc(c)}</b> ${over ? '<span class="badge crit" style="margin-left:6px">estourou</span>' : pct >= 85 ? '<span class="badge warn" style="margin-left:6px">no limite</span>' : '<span class="badge good" style="margin-left:6px">dentro</span>'}</span>
-            <span style="font-variant-numeric:tabular-nums">${fmtBRL(spent)} <span class="muted">/ ${fmtBRL(limit)}</span></span>
-          </div>
-          <div class="meter ${lvl}" style="position:relative">
-            <div style="width:${Math.min(100, pct).toFixed(1)}%"></div>
-            <div title="ritmo esperado do mês" style="position:absolute; top:-2px; bottom:-2px; left:${Math.min(100, monthPct).toFixed(1)}%; width:2px; background:var(--ink-3); opacity:.6"></div>
-          </div>
-          <div class="muted" style="margin-top:3px; font-size:12px">${over ? `passou ${fmtBRL(spent - limit)} do limite` : `restam ${fmtBRL(limit - spent)}`} · a linha cinza marca o ritmo esperado (${monthPct.toFixed(0)}% do mês)</div>
-        </div>`;
-      }).join("")}
-    </div>` : `<div class="empty"><span class="big">🧮</span>Você ainda não definiu limites de gastos.<br>Clique em <b>Definir limites</b> ou peça uma <b>sugestão à IA</b>.</div>`}
-    ${semLimite.length ? `<div class="ai-box section-gap">💡 Você gastou nestas categorias sem limite definido: ${semLimite.map(([c, v]) => `<b>${esc(c)}</b> (${fmtBRL0(v)})`).join(", ")}. Que tal definir um teto para elas?</div>` : ""}
   </div>
 
-  <div class="card section-gap">
-    <h3>📄 Suas contas fixas mensais</h3>
-    <div class="chart-sub">Puxadas automaticamente dos boletos recorrentes</div>
-    ${fixedBills().length ? `<div class="table-wrap"><table>
-      <thead><tr><th>Conta</th><th>Categoria</th><th class="num">Valor/mês</th></tr></thead>
-      <tbody>${fixedBills().map(b => `<tr>
-        <td><b>${esc(b.name)}</b></td><td><span class="chip">${esc(b.category)}</span></td>
-        <td class="num">${fmtBRL(b.amount)}</td></tr>`).join("")}
-        <tr><td colspan="2"><b>Total comprometido/mês</b></td><td class="num"><b>${fmtBRL(fixedMonthlyTotal())}</b></td></tr>
-      </tbody></table></div>
-      <div class="muted section-gap">Isso representa <b>${renda > 0 ? (fixas / renda * 100).toFixed(0) : 0}%</b> da sua renda já comprometido antes de qualquer gasto variável.</div>`
-    : `<div class="empty"><span class="big">📭</span>Nenhuma conta fixa cadastrada. Adicione contas recorrentes em <a href="#" data-goto="boletos">Boletos & Contas</a>.</div>`}
-  </div>
+  ${budgets.length ? budgetInsightBanner(budgetTotal, spentBudgeted, monthPct) : ""}`;
+}
 
-  <div class="card section-gap">
-    <h3>🎯 Regra 50/30/20 — referência</h3>
-    <p class="muted" style="margin:6px 0 14px">Uma divisão saudável e simples da renda. Compare com o seu orçamento acima.</p>
-    ${[["Essenciais (necessidades)", 0.5, "moradia, contas, mercado, transporte, saúde"],
-       ["Estilo de vida (desejos)", 0.3, "delivery, lazer, assinaturas, compras"],
-       ["Futuro (investir + quitar dívidas)", 0.2, "aportes e amortização de dívidas"]].map(([label, frac, ex]) => `
-      <div style="margin-bottom:12px">
-        <div class="flex spread" style="font-size:14px; margin-bottom:4px">
-          <span><b>${label}</b> — ${(frac*100)}%</span>
-          <b style="font-variant-numeric:tabular-nums">${fmtBRL(renda * frac)}</b>
-        </div>
-        <div class="meter"><div style="width:${frac*100}%"></div></div>
-        <div class="muted" style="font-size:12px; margin-top:3px">${ex}</div>
-      </div>`).join("")}
+function budgetDonut(mks) {
+  const all = catSpendMonths(mks);
+  const total = all.reduce((a, [, v]) => a + v, 0);
+  if (!total) return `<div class="empty" style="padding:24px 10px"><span class="big">🍃</span>Nenhum gasto no mês.</div>`;
+  const top = all.slice(0, 5), restV = all.slice(5).reduce((a, [, v]) => a + v, 0);
+  const items = restV > 0 ? [...top, ["Outros", restV]] : top;
+  const cols = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s7)", "var(--s5)", "var(--baseline)"];
+  const cx = 80, cy = 80, R = 72, r = 48; let a0 = -90, paths = "";
+  items.forEach(([, v], i) => {
+    const a1 = a0 + v / total * 360, large = (a1 - a0) > 180 ? 1 : 0;
+    const [x0, y0] = polar(cx, cy, R, a0), [x1, y1] = polar(cx, cy, R, a1), [x2, y2] = polar(cx, cy, r, a1), [x3, y3] = polar(cx, cy, r, a0);
+    paths += `<path d="M${x0.toFixed(1)} ${y0.toFixed(1)} A${R} ${R} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)} L${x2.toFixed(1)} ${y2.toFixed(1)} A${r} ${r} 0 ${large} 0 ${x3.toFixed(1)} ${y3.toFixed(1)} Z" fill="${cols[i % cols.length]}" stroke="var(--surface-1)" stroke-width="2.5"/>`;
+    a0 = a1;
+  });
+  const donut = `<svg viewBox="0 0 160 160" width="150" height="150" style="flex-shrink:0">${paths}
+    <text x="80" y="78" text-anchor="middle" font-size="15" font-weight="700" fill="var(--ink-1)">${fmtBRL0(total)}</text>
+    <text x="80" y="94" text-anchor="middle" font-size="10" fill="var(--ink-3)">gasto total</text></svg>`;
+  const legend = `<div class="donut-legend">${items.map(([c, v], i) => `
+    <button class="dl-row cat-row" data-cat-detail="${esc(c)}" style="display:grid">
+      <span class="dl-dot" style="background:${cols[i % cols.length]}"></span>
+      <span style="text-align:left">${esc(c)}</span>
+      <span class="dl-pct">${(v / total * 100).toFixed(1)}%</span>
+      <span class="dl-val">${fmtBRL0(v)}</span>
+    </button>`).join("")}</div>`;
+  return `<div class="flex" style="gap:14px; align-items:center; flex-wrap:wrap; justify-content:center">${donut}${legend}</div>`;
+}
+
+function budgetAlerts(budgets, spentByCat, budgetTotal, spentBudgeted) {
+  if (!budgets.length) return `<div class="muted" style="font-size:13px">Defina limites para receber alertas do orçamento.</div>`;
+  const out = [];
+  const estourou = budgets.filter(([c, l]) => (spentByCat[c] || 0) > l);
+  const perto = budgets.filter(([c, l]) => (spentByCat[c] || 0) <= l && (spentByCat[c] || 0) / l >= 0.85);
+  const dentro = budgets.filter(([c, l]) => (spentByCat[c] || 0) / l < 0.85).length;
+  estourou.slice(0, 2).forEach(([c, l]) => out.push(`<div class="bud-alert warn"><span class="ba-ic">${icon("alert")}</span>
+    <div class="ba-b"><div class="ba-t">${esc(c)} estourou o limite</div><div class="ba-d">${fmtBRL(spentByCat[c])} de ${fmtBRL(l)} · ${fmtBRL(spentByCat[c]-l)} acima</div></div>
+    <button class="btn secondary small" data-cat-detail="${esc(c)}">Ver detalhes</button></div>`));
+  perto.slice(0, 2).forEach(([c, l]) => out.push(`<div class="bud-alert warn"><span class="ba-ic">${icon("alert")}</span>
+    <div class="ba-b"><div class="ba-t">${esc(c)} está em ${((spentByCat[c]||0)/l*100).toFixed(0)}% do limite</div><div class="ba-d">Faltam ${fmtBRL(l-(spentByCat[c]||0))} para atingir o limite</div></div>
+    <button class="btn secondary small" data-cat-detail="${esc(c)}">Ver detalhes</button></div>`));
+  if (dentro > 0) out.push(`<div class="bud-alert info"><span class="ba-ic">${icon("activity")}</span>
+    <div class="ba-b"><div class="ba-t">Muito bem! ${dentro} categoria(s) dentro do planejado</div><div class="ba-d">Continue assim para alcançar suas metas 💪</div></div></div>`);
+  const restante = budgetTotal - spentBudgeted;
+  if (restante > 0) out.push(`<div class="bud-alert pos"><span class="ba-ic">${icon("check")}</span>
+    <div class="ba-b"><div class="ba-t">Você ainda tem ${fmtBRL(restante)} de limite disponível</div><div class="ba-d">Aproveite para investir ou guardar</div></div>
+    <button class="btn secondary small" data-goto="investimentos">${icon("more", 16)}</button></div>`);
+  return out.join("") || `<div class="muted" style="font-size:13px">Tudo dentro do planejado. 🎉</div>`;
+}
+
+function budgetInsightBanner(budgetTotal, spentBudgeted, monthPct) {
+  const expected = budgetTotal * monthPct / 100;
+  const projected = monthPct > 0 ? spentBudgeted / (monthPct / 100) : spentBudgeted;
+  const leftover = budgetTotal - projected;
+  let msg;
+  if (expected > 0 && spentBudgeted < expected * 0.97) {
+    const pct = ((expected - spentBudgeted) / expected * 100).toFixed(0);
+    msg = `Seus gastos estão <b>${pct}% abaixo do planejado</b> até agora.${leftover > 0 ? ` Se mantiver esse ritmo, você poderá guardar cerca de <b>${fmtBRL0(leftover)}</b> a mais neste mês.` : ""}`;
+  } else if (spentBudgeted > expected * 1.03) {
+    const pct = ((spentBudgeted - expected) / expected * 100).toFixed(0);
+    msg = `Seus gastos estão <b>${pct}% acima do ritmo planejado</b>. Segure um pouco para não estourar o orçamento no fim do mês.`;
+  } else {
+    msg = `Seus gastos estão <b>no ritmo do planejado</b>. Continue acompanhando para bater suas metas.`;
+  }
+  return `<div class="insight-banner">
+    <span class="ib-ic">${icon("sparkles")}</span>
+    <div class="ib-b"><div class="ib-t">Insight do mês</div><div class="ib-d">${msg}</div></div>
+    <button class="btn" id="btnBudgetAI2" ${hasAIKey() ? "" : "disabled"}>Ver sugestão completa</button>
   </div>`;
 }
 
@@ -2298,8 +2365,8 @@ function attachHandlers() {
   document.querySelectorAll("[data-rm-cat-in]").forEach(b => b.onclick = () => { if (confirm("Remover a categoria \"" + b.dataset.rmCatIn + "\"?")) removeCustomCat("entrada", b.dataset.rmCatIn); });
 
   // orçamento
-  $("#btnSetBudgets") && ($("#btnSetBudgets").onclick = modalBudgets);
-  $("#btnBudgetAI") && ($("#btnBudgetAI").onclick = budgetSuggestAI);
+  ["btnSetBudgets", "btnSetBudgets2", "btnSetBudgets3"].forEach(id => $("#" + id) && ($("#" + id).onclick = modalBudgets));
+  ["btnBudgetAI", "btnBudgetAI2"].forEach(id => $("#" + id) && ($("#" + id).onclick = budgetSuggestAI));
 
   // plano
   $("#btnEditGoal") && ($("#btnEditGoal").onclick = modalGoal);

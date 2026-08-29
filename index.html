@@ -276,7 +276,9 @@ select.mini{padding:6px 28px 6px 11px; border-radius:9px; border:1px solid var(-
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23898781' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
   background-repeat:no-repeat; background-position:right 9px center;}
 .donut-legend{display:flex; flex-direction:column; gap:9px; flex:1; min-width:150px;}
-.donut-legend .dl-row{display:grid; grid-template-columns:auto 1fr auto auto; align-items:center; gap:9px; font-size:13px;}
+.donut-legend .dl-row{display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:9px; font-size:13px;}
+.donut-legend .dl-row > span:nth-child(2){min-width:0; overflow-wrap:anywhere; text-align:left;}
+.donut-legend .dl-val{white-space:nowrap;}
 .donut-legend .dl-dot{width:10px; height:10px; border-radius:50%;}
 .donut-legend .dl-val{font-variant-numeric:tabular-nums; color:var(--ink-2);}
 .donut-legend .dl-pct{font-variant-numeric:tabular-nums; font-weight:600; min-width:44px; text-align:right;}
@@ -287,6 +289,53 @@ select.mini{padding:6px 28px 6px 11px; border-radius:9px; border:1px solid var(-
 .tip-banner .tb-ic{width:40px; height:40px; border-radius:12px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;}
 .tip-banner .tb-b{flex:1; min-width:0;} .tip-banner .tb-t{font-weight:600; font-size:14px;} .tip-banner .tb-d{font-size:13px; color:var(--ink-2); margin-top:1px;}
 @media (max-width:560px){ .tip-banner{flex-wrap:wrap;} }
+
+/* ===== Orçamento redesign (mockup) ===== */
+.bkpi-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:16px;}
+@media (max-width:900px){ .bkpi-grid{grid-template-columns:1fr 1fr;} }
+@media (max-width:520px){ .bkpi-grid{grid-template-columns:1fr;} }
+.bkpi{background:var(--surface-1); border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); padding:18px 20px;}
+.bkpi .bk-label{font-size:11.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); display:flex; align-items:center; justify-content:space-between;}
+.bkpi .bk-val{font-size:clamp(20px,2.6vw,27px); font-weight:700; font-variant-numeric:tabular-nums; margin:8px 0 10px; white-space:nowrap;}
+.bkpi .bk-foot{display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--ink-3);}
+.bkpi .bk-foot .ico{width:16px; height:16px; color:var(--ink-3);} .bkpi .bk-foot .ico svg{width:16px; height:16px;}
+.bud-2col{display:grid; grid-template-columns:1.55fr 1fr; gap:16px; margin-top:16px; align-items:start;}
+@media (max-width:960px){ .bud-2col{grid-template-columns:1fr;} }
+.bud-row{padding:6px 0;}
+.bud-row .br-head{display:flex; align-items:center; gap:11px;}
+.bud-row .br-ic{width:34px; height:34px; border-radius:10px; background:var(--page); color:var(--ink-2); display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+.bud-row .br-ic svg{width:18px; height:18px;}
+.bud-row .br-name{font-weight:600; font-size:14.5px;}
+.bud-row .br-vals{margin-left:auto; font-variant-numeric:tabular-nums; font-size:14px; white-space:nowrap;}
+.bud-row .meter{margin:8px 0 3px;}
+.bud-row .br-sub{font-size:12px; color:var(--ink-3);}
+.status-pill{display:inline-flex; align-items:center; padding:2px 10px; border-radius:99px; font-size:11.5px; font-weight:600;}
+.status-pill.good{background:rgba(12,163,12,.13); color:var(--good-text);}
+.status-pill.warn{background:rgba(250,178,25,.18); color:#8a6200;}
+.status-pill.crit{background:rgba(208,59,59,.13); color:var(--critical);}
+:root[data-theme="dark"] .status-pill.warn{color:var(--warning);}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .status-pill.warn{color:var(--warning);} }
+.bud-alert{display:flex; align-items:center; gap:12px; padding:13px 15px; border-radius:12px; border:1px solid var(--border); margin-bottom:10px;}
+.bud-alert .ba-ic{width:22px; flex-shrink:0; display:flex; align-items:center; justify-content:center;}
+.bud-alert .ba-ic svg{width:20px; height:20px;}
+.bud-alert .ba-b{flex:1; min-width:0;} .bud-alert .ba-t{font-weight:600; font-size:13.5px;} .bud-alert .ba-d{font-size:12.5px; color:var(--ink-2); margin-top:1px;}
+.bud-alert.warn{background:rgba(250,178,25,.08); border-color:rgba(250,178,25,.35);} .bud-alert.warn .ba-ic{color:var(--warning);} .bud-alert.warn .ba-t{color:#8a6200;}
+.bud-alert.info{background:var(--accent-soft); border-color:transparent;} .bud-alert.info .ba-ic{color:var(--accent);} .bud-alert.info .ba-t{color:var(--accent);}
+.bud-alert.pos{background:rgba(12,163,12,.07); border-color:rgba(12,163,12,.3);} .bud-alert.pos .ba-ic{color:var(--good-text);} .bud-alert.pos .ba-t{color:var(--good-text);}
+:root[data-theme="dark"] .bud-alert.warn .ba-t{color:var(--warning);}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .bud-alert.warn .ba-t{color:var(--warning);} }
+.insight-banner{display:flex; align-items:center; gap:14px; margin-top:16px; padding:16px 18px; border-radius:16px; background:var(--accent-soft); border:1px solid transparent;}
+.insight-banner .ib-ic{color:var(--accent); flex-shrink:0;} .insight-banner .ib-ic svg{width:26px; height:26px;}
+.insight-banner .ib-b{flex:1; min-width:0;} .insight-banner .ib-t{font-weight:700; color:var(--accent); font-size:13.5px;} .insight-banner .ib-d{font-size:13px; color:var(--ink-1); margin-top:2px;}
+@media (max-width:560px){
+  .insight-banner{flex-wrap:wrap;}
+  .insight-banner .ib-b{flex-basis:calc(100% - 40px);}
+  .insight-banner .btn{width:100%; justify-content:center; margin-top:4px;}
+  .bud-row .br-head{flex-wrap:wrap;}
+  .bud-row .br-vals{margin-left:auto; font-size:13px;}
+  .bud-alert{flex-wrap:wrap;} .bud-alert .btn{margin-left:45px;}
+  .view-head{flex-wrap:wrap;}
+}
 
 .btn{
   display:inline-flex; align-items:center; gap:8px; padding:10px 16px; border-radius:10px;
@@ -491,7 +540,7 @@ svg text{font-family:inherit;}
 <div id="toast"></div>
 <div id="modalBack" class="hidden"><div class="modal" id="modalBox"></div></div>
 
-<script src="firebase-config.js?v=14"></script>
-<script type="module" src="app.js?v=14"></script>
+<script src="firebase-config.js?v=15"></script>
+<script type="module" src="app.js?v=15"></script>
 </body>
 </html>
