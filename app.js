@@ -1660,6 +1660,24 @@ function viewOrcamento() {
     </div>
   </div>
 
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-head"><h3>Contas fixas mensais</h3>
+      <button class="btn secondary small" id="btnAddFixed"><span class="ico" data-ic="plus" style="width:14px;height:14px"></span> Nova conta fixa</button></div>
+    <div class="chart-sub" style="margin-top:-6px; margin-bottom:12px">Suas contas recorrentes — puxadas de Contas & Boletos. Total: <b>${fmtBRL(fixas)}</b>/mês (${renda > 0 ? (fixas / renda * 100).toFixed(0) : 0}% da renda)</div>
+    ${fixedBills().length ? `<div class="table-wrap"><table class="inv-table">
+      <thead><tr><th>Conta</th><th>Categoria</th><th class="num">Valor/mês</th><th>Próx. venc.</th><th></th></tr></thead>
+      <tbody>${fixedBills().map(b => `<tr>
+        <td><div class="inv-asset"><span class="ia-ic">${icon(catIcon(b.category))}</span><b>${esc(b.name)}</b>${b.dda ? ' <span class="chip">DDA</span>' : ""}</div></td>
+        <td><span class="chip">${esc(b.category)}</span></td>
+        <td class="num">${fmtBRL(b.amount)}</td>
+        <td style="white-space:nowrap; color:var(--ink-2)">${b.dueDate ? b.dueDate.split("-").reverse().slice(0,2).join("/") : "—"}</td>
+        <td style="white-space:nowrap"><button class="icon-btn" title="Editar" data-edit-bill="${b.id}">✏️</button><button class="icon-btn" title="Excluir" data-del-bill="${b.id}">🗑️</button></td>
+      </tr>`).join("")}
+      <tr><td colspan="2"><b>Total comprometido/mês</b></td><td class="num"><b>${fmtBRL(fixas)}</b></td><td colspan="2"></td></tr>
+      </tbody></table></div>`
+    : `<div class="empty"><span class="big">📄</span>Nenhuma conta fixa ainda. Clique em <b>Nova conta fixa</b> para cadastrar (aluguel, luz, internet, assinaturas…).</div>`}
+  </div>
+
   ${budgets.length ? budgetInsightBanner(budgetTotal, spentBudgeted, monthPct) : ""}`;
 }
 
@@ -2681,6 +2699,7 @@ function attachHandlers() {
 
   // boletos
   $("#btnAddBill") && ($("#btnAddBill").onclick = () => modalBill());
+  $("#btnAddFixed") && ($("#btnAddFixed").onclick = () => { modalBill(); const r = $("#bRecurring"); if (r) { r.checked = true; $("#bTimesRow")?.classList.remove("hidden"); } });
   document.querySelectorAll("[data-edit-bill]").forEach(b => b.onclick = () => modalBill(BILLS.find(x => x.id === b.dataset.editBill)));
   document.querySelectorAll("[data-del-bill]").forEach(b => b.onclick = async () => {
     if (confirm("Excluir esta conta?")) await deleteDoc(doc(db, "households", hid, "bills", b.dataset.delBill));
