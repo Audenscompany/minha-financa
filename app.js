@@ -1240,23 +1240,59 @@ function modalImportFatura(cardId) {
       <div class="muted" style="margin-top:8px; font-size:12px">.pdf, .png, .jpg, .csv</div>
       <input type="file" id="fatFile" accept=".pdf,.csv,.txt,image/*" class="hidden">
     </div>
+    <div id="fatPwWrap" class="hidden section-gap">
+      <div class="ai-box" id="fatPwMsg" style="background:var(--warn-soft, rgba(230,160,30,.12)); font-size:13px">🔒 Esta fatura é protegida por senha (comum no C6, Nubank, Itaú…). Digite a senha do PDF para abrir.</div>
+      <div class="flex" style="gap:8px; margin-top:8px">
+        <input id="fatPw" type="password" placeholder="Senha do PDF" style="flex:1; padding:9px 11px; border-radius:9px; border:1px solid var(--border); background:var(--page)">
+        <button class="btn" id="fatPwGo">Abrir fatura</button>
+      </div>
+      <p class="muted" style="font-size:12px; margin-top:6px">Costuma ser os 4 primeiros dígitos do CPF, a data de nascimento ou os últimos dígitos do cartão — depende do banco.</p>
+    </div>
     <div id="fatStatus" class="section-gap"></div>
     <div id="fatResult"></div>
     <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
   $("#mCancel").onclick = closeModal;
   $("#fatPick").onclick = () => $("#fatFile").click();
   $("#fatFile").onchange = e => e.target.files[0] && importFatura(e.target.files[0], cardId);
+  $("#fatPwGo").onclick = () => { const p = $("#fatPw").value; if (faturaFile) importFatura(faturaFile, cardId, p); };
+  $("#fatPw").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#fatPwGo").click(); } };
   const dz = $("#fatDrop");
   dz.ondragover = e => { e.preventDefault(); dz.classList.add("drag"); };
   dz.ondragleave = () => dz.classList.remove("drag");
   dz.ondrop = e => { e.preventDefault(); dz.classList.remove("drag"); e.dataTransfer.files[0] && importFatura(e.dataTransfer.files[0], cardId); };
 }
-async function importFatura(file, cardId) {
+let faturaFile = null;
+async function importFatura(file, cardId, password) {
+  faturaFile = file;
   const status = $("#fatStatus");
   status.innerHTML = `<div class="ai-box loading-dots">🤖 Lendo a fatura</div>`;
   $("#fatResult").innerHTML = "";
   try {
-    const blocks = await fileToContentBlock(file);
+    let blocks;
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+    if (isPdf) {
+      let text;
+      try {
+        text = await pdfToText(file, password);
+      } catch (err) {
+        if (err.code === "NEED_PASSWORD" || err.code === "WRONG_PASSWORD") {
+          status.innerHTML = "";
+          const pw = $("#fatPwWrap"); pw.classList.remove("hidden");
+          $("#fatPwMsg").innerHTML = err.code === "WRONG_PASSWORD"
+            ? "🔒 <b>Senha incorreta.</b> Confira e tente de novo."
+            : "🔒 Esta fatura é protegida por senha (comum no C6, Nubank, Itaú…). Digite a senha do PDF para abrir.";
+          const inp = $("#fatPw"); if (inp) { inp.value = ""; inp.focus(); }
+          return;
+        }
+        throw err;
+      }
+      $("#fatPwWrap") && $("#fatPwWrap").classList.add("hidden");
+      if (!text || text.replace(/\s/g, "").length < 20)
+        throw new Error("Não consegui ler o texto deste PDF (pode ser escaneado). Tente enviar um print (imagem) da fatura.");
+      blocks = [{ type: "text", text: "Conteúdo extraído da fatura (PDF):\n\n" + text.slice(0, 60000) }];
+    } else {
+      blocks = await fileToContentBlock(file);
+    }
     const raw = await callClaude({ maxTokens: 4000, system: FATURA_SYS, messages: [{ role: "user", content: [{ type: "text", text: "Extraia as compras desta fatura." }, ...blocks] }] });
     const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
     faturaDraft = (json.itens || []).filter(i => +i.valor > 0);
@@ -2939,6 +2975,48 @@ async function fileToContentBlock(file) {
   const txt = await fileToText(file);
   return [{ type: "text", text: `${label.text}\n${txt.slice(0, 38000)}` }];
 }
+
+// ---------- PDF.js: abrir PDF (inclusive protegido por senha) e extrair texto ----------
+let _pdfjsPromise = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (_pdfjsPromise) return _pdfjsPromise;
+  _pdfjsPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload = () => {
+      try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; } catch {}
+      resolve(window.pdfjsLib);
+    };
+    s.onerror = () => reject(new Error("Não consegui carregar o leitor de PDF."));
+    document.head.appendChild(s);
+  });
+  return _pdfjsPromise;
+}
+// Lança erro com .code = "NEED_PASSWORD" | "WRONG_PASSWORD" quando o PDF exige senha.
+async function pdfToText(file, password) {
+  const lib = await loadPdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  let pdf;
+  try {
+    pdf = await lib.getDocument({ data, password: password || "" }).promise;
+  } catch (e) {
+    if (e && e.name === "PasswordException") {
+      const err = new Error(e.code === 2 ? "Senha incorreta." : "PDF protegido por senha.");
+      err.code = e.code === 2 ? "WRONG_PASSWORD" : "NEED_PASSWORD";
+      throw err;
+    }
+    throw e;
+  }
+  let text = "";
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    text += content.items.map(i => i.str).join(" ") + "\n";
+  }
+  return text;
+}
+
 async function importReadFile(files) {
   const status = $("#impStatus");
   status.innerHTML = `<div class="ai-box loading-dots">🤖 Lendo ${files.map(f => esc(f.name)).join(", ")}</div>`;
