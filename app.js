@@ -20,6 +20,7 @@ let chatHistory = [];
 let receiptDraft = null;
 let dashPeriod = "mes"; // mes | mesPassado | m3 | m6 | ano
 let calYM = null;       // 'YYYY-MM' do calendário
+let budYM = null;       // 'YYYY-MM' do orçamento (mês planejado)
 let flowRange = "12";   // 6 | 12 | ano  (gráfico de fluxo)
 let analysisPeriod = "mes"; // mes | m3 | m6 (análise de gastos)
 
@@ -1698,25 +1699,54 @@ function budgetLevel(spent, limit) {
   return p > 100 ? "crit" : p >= 85 ? "warn" : "good";
 }
 
+// Compromissos projetados para um mês: contas fixas (recorrentes) + boletos do mês + parcelas de dívidas
+function monthCommitments(ym) {
+  const [Y, M] = ym.split("-").map(Number);
+  const lastDay = new Date(Y, M, 0).getDate();
+  const bills = [];
+  for (const b of pendingBills()) {
+    if (!b.dueDate) continue;
+    const bym = monthKey(b.dueDate);
+    if (b.recurring) {
+      const ahead = (Y - +bym.split("-")[0]) * 12 + (M - +bym.split("-")[1]);
+      if (ahead < 0) continue;
+      if (b.totalTimes && (b.paidTimes || 0) + ahead >= b.totalTimes) continue; // recorrência acabou
+      bills.push({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, id: b.id, day: Math.min(+b.dueDate.split("-")[2], lastDay), recurring: true });
+    } else if (bym === ym) {
+      bills.push({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, id: b.id, day: +b.dueDate.split("-")[2] });
+    }
+  }
+  const debts = debtCalItems(ym).map(d => ({ ...d, day: +d.dueDate.split("-")[2] }));
+  const fixasTotal = bills.reduce((a, b) => a + b.amount, 0);
+  const dividasTotal = debts.reduce((a, b) => a + b.amount, 0);
+  return { bills, debts, fixasTotal, dividasTotal, total: fixasTotal + dividasTotal };
+}
+
 function viewOrcamento() {
-  const mk = todayISO().slice(0, 7);
+  const curMK = todayISO().slice(0, 7);
+  const mk = budYM || curMK;
+  const isCurrent = mk === curMK;
   const renda = SETTINGS.incomeTarget || avgIncome();
-  const fixas = fixedMonthlyTotal();
+  const mc = monthCommitments(mk);
+  const fixas = mc.fixasTotal, dividas = mc.dividasTotal;
   const budgets = getBudgets();
   const budgetTotal = budgets.reduce((a, [, v]) => a + v, 0);
-  const sobra = renda - fixas - budgetTotal;
+  const sobra = renda - fixas - dividas - budgetTotal;
   const spentByCat = Object.fromEntries(catSpend(mk));
   const spentBudgeted = budgets.reduce((a, [c]) => a + (spentByCat[c] || 0), 0);
-  const now = new Date(), dayOfMonth = now.getDate(), daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const monthPct = dayOfMonth / daysInMonth * 100;
+  const now = new Date(), dayOfMonth = now.getDate();
+  const daysInMonth = new Date(+mk.split("-")[0], +mk.split("-")[1], 0).getDate();
+  const monthPct = isCurrent ? dayOfMonth / daysInMonth * 100 : 100;
   const ordered = [...budgets].sort((a, b) => (spentByCat[b[0]] || 0) / b[1] - (spentByCat[a[0]] || 0) / a[1]);
   const rowsShown = ordered.slice(0, 7);
+  const compromissos = fixas + dividas;
 
   return `
   <div class="view-head">
-    <div><h2>Orçamento do mês <span title="Planeje limites por categoria e acompanhe o gasto real." style="color:var(--ink-3); cursor:help; font-size:15px">ⓘ</span></h2>
-      <div class="sub">Planeje seus gastos e acompanhe em tempo real</div></div>
+    <div><h2>Orçamento <span title="Escolha o mês para planejar. Contas fixas e dívidas são projetadas para o mês selecionado." style="color:var(--ink-3); cursor:help; font-size:15px">ⓘ</span></h2>
+      <div class="sub">Planeje um mês e veja se ele fecha dentro da renda</div></div>
     <div class="flex">
+      <input type="month" id="budMonth" value="${mk}" style="padding:8px 11px; border-radius:9px; border:1px solid var(--border); background:var(--page)">
       <button class="btn secondary" id="btnBudgetAI" ${hasAIKey() ? "" : "disabled"}><span class="ico" data-ic="sparkles" style="width:16px;height:16px"></span> Sugerir com IA</button>
       <button class="btn" id="btnSetBudgets"><span class="ico" data-ic="settings" style="width:15px;height:15px"></span> Definir limites</button>
     </div>
@@ -1725,16 +1755,25 @@ function viewOrcamento() {
   <div class="bkpi-grid">
     <div class="bkpi"><div class="bk-label">Renda planejada <button class="icon-btn" id="btnSetBudgets2" title="Editar" style="padding:0">${icon("settings", 15)}</button></div>
       <div class="bk-val" style="color:var(--accent)">${fmtBRL(renda)}</div>
-      <div class="bk-foot"><span class="ico">${icon("wallet")}</span> Ajuste em Configurações</div></div>
+      <div class="bk-foot"><span class="ico">${icon("wallet")}</span> em ${monthLabel(mk)}</div></div>
     <div class="bkpi"><div class="bk-label">Contas fixas</div>
       <div class="bk-val">${fmtBRL(fixas)}</div>
-      <div class="bk-foot"><span class="ico">${icon("calendar")}</span> ${fixedBills().length} conta(s) recorrente(s)</div></div>
-    <div class="bkpi"><div class="bk-label">Limites de gastos</div>
-      <div class="bk-val">${fmtBRL(budgetTotal)}</div>
-      <div class="bk-foot"><span class="ico">${icon("folder")}</span> ${budgets.length} categoria(s) com limite</div></div>
+      <div class="bk-foot"><span class="ico">${icon("calendar")}</span> ${mc.bills.length} conta(s) em ${monthLabel(mk)}</div></div>
+    <div class="bkpi"><div class="bk-label">Dívidas no mês</div>
+      <div class="bk-val" style="color:${dividas > 0 ? "var(--critical)" : "var(--ink-1)"}">${fmtBRL(dividas)}</div>
+      <div class="bk-foot"><span class="ico">${icon("trend-down")}</span> ${mc.debts.length} parcela(s) negociada(s)</div></div>
     <div class="bkpi"><div class="bk-label">Sobra p/ metas</div>
       <div class="bk-val" style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</div>
-      <div class="bk-foot"><span class="ico">${icon("target")}</span> ${sobra >= 0 ? "Disponível p/ investir/guardar" : "Acima da renda — reveja"}</div></div>
+      <div class="bk-foot"><span class="ico">${icon("target")}</span> renda − fixas − dívidas − limites</div></div>
+  </div>
+
+  <div class="card section-gap" style="border-left:4px solid ${sobra >= 0 ? "var(--good)" : "var(--critical)"}">
+    <div class="flex spread" style="flex-wrap:wrap; gap:10px">
+      <div><h3 style="display:inline">${sobra >= 0 ? "✅ " + monthLabel(mk) + " fecha no positivo" : "⚠️ " + monthLabel(mk) + " não fecha"}</h3>
+        <div class="chart-sub" style="margin-top:4px">Renda ${fmtBRL0(renda)} − contas fixas ${fmtBRL0(fixas)} − dívidas ${fmtBRL0(dividas)} − limites ${fmtBRL0(budgetTotal)} = <b style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</b></div></div>
+      <div style="text-align:right"><div class="muted" style="font-size:12px">Comprometido (fixas+dívidas)</div>
+        <div style="font-size:20px; font-weight:700">${fmtBRL0(compromissos)} <span class="muted" style="font-size:13px; font-weight:500">(${renda > 0 ? (compromissos / renda * 100).toFixed(0) : 0}% da renda)</span></div></div>
+    </div>
   </div>
 
   <div id="budgetAIBox" class="section-gap hidden"></div>
@@ -1742,7 +1781,8 @@ function viewOrcamento() {
   <div class="bud-2col">
     <div class="panel">
       <div class="panel-head" style="margin-bottom:8px"><h3>Planejado × gasto real</h3>
-        <span class="muted" style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px">${icon("calendar", 15)} ${monthLabel(mk)} · dia ${dayOfMonth}/${daysInMonth}</span></div>
+        <span class="muted" style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px">${icon("calendar", 15)} ${monthLabel(mk)}${isCurrent ? " · dia " + dayOfMonth + "/" + daysInMonth : ""}</span></div>
+      ${!isCurrent ? `<div class="ai-box" style="margin-bottom:12px; font-size:13px">📅 Você está planejando <b>${monthLabel(mk)}</b>. Os limites são os que você definiu; o "gasto real" só conta quando o mês chegar.</div>` : ""}
       ${budgets.length ? `
       <div class="flex" style="gap:16px; margin:4px 0 16px; font-size:13.5px; flex-wrap:wrap">
         <span>Limite total: <b>${fmtBRL(budgetTotal)}</b></span>
@@ -1784,24 +1824,26 @@ function viewOrcamento() {
   </div>
 
   <div class="panel" style="margin-top:16px">
-    <div class="panel-head"><h3>Contas fixas mensais</h3>
+    <div class="panel-head"><h3>Compromissos de ${monthLabel(mk)}</h3>
       <button class="btn secondary small" id="btnAddFixed"><span class="ico" data-ic="plus" style="width:14px;height:14px"></span> Nova conta fixa</button></div>
-    <div class="chart-sub" style="margin-top:-6px; margin-bottom:12px">Suas contas recorrentes — puxadas de Contas & Boletos. Total: <b>${fmtBRL(fixas)}</b>/mês (${renda > 0 ? (fixas / renda * 100).toFixed(0) : 0}% da renda)</div>
-    ${fixedBills().length ? `<div class="table-wrap"><table class="inv-table">
-      <thead><tr><th>Conta</th><th>Categoria</th><th class="num">Valor/mês</th><th>Próx. venc.</th><th></th></tr></thead>
-      <tbody>${fixedBills().map(b => `<tr>
-        <td><div class="inv-asset"><span class="ia-ic">${icon(catIcon(b.category))}</span><b>${esc(b.name)}</b>${b.dda ? ' <span class="chip">DDA</span>' : ""}</div></td>
-        <td><span class="chip">${esc(b.category)}</span></td>
-        <td class="num">${fmtBRL(b.amount)}</td>
-        <td style="white-space:nowrap; color:var(--ink-2)">${b.dueDate ? b.dueDate.split("-").reverse().slice(0,2).join("/") : "—"}</td>
-        <td style="white-space:nowrap"><button class="icon-btn" title="Editar" data-edit-bill="${b.id}">✏️</button><button class="icon-btn" title="Excluir" data-del-bill="${b.id}">🗑️</button></td>
+    <div class="chart-sub" style="margin-top:-6px; margin-bottom:12px">Contas fixas + dívidas negociadas que vencem neste mês. Total: <b>${fmtBRL(compromissos)}</b> (${renda > 0 ? (compromissos / renda * 100).toFixed(0) : 0}% da renda)</div>
+    ${(mc.bills.length + mc.debts.length) ? `<div class="table-wrap"><table class="inv-table">
+      <thead><tr><th>Compromisso</th><th>Tipo</th><th class="num">Valor</th><th>Dia</th><th></th></tr></thead>
+      <tbody>${[...mc.bills.map(b => ({ ...b, kind: "fixa" })), ...mc.debts.map(d => ({ ...d, kind: "divida" }))].sort((a, b) => a.day - b.day).map(x => `<tr>
+        <td><div class="inv-asset"><span class="ia-ic">${icon(x.kind === "divida" ? "trend-down" : catIcon(x.category))}</span><b>${esc(x.name)}</b>${x.dda ? ' <span class="chip">DDA</span>' : ""}</div></td>
+        <td>${x.kind === "divida" ? '<span class="status-pill crit">dívida</span>' : `<span class="chip">${esc(x.category)}</span>`}</td>
+        <td class="num">${fmtBRL(x.amount)}</td>
+        <td style="white-space:nowrap; color:var(--ink-2)">${String(x.day).padStart(2,"0")}/${mk.split("-")[1]}</td>
+        <td style="white-space:nowrap">${x.kind === "fixa" ? `<button class="icon-btn" title="Editar" data-edit-bill="${x.id}">✏️</button><button class="icon-btn" title="Excluir" data-del-bill="${x.id}">🗑️</button>` : `<button class="icon-btn" title="Ver dívida" data-goto="dividas">→</button>`}</td>
       </tr>`).join("")}
-      <tr><td colspan="2"><b>Total comprometido/mês</b></td><td class="num"><b>${fmtBRL(fixas)}</b></td><td colspan="2"></td></tr>
+      <tr><td colspan="2"><b>Contas fixas</b></td><td class="num"><b>${fmtBRL(fixas)}</b></td><td colspan="2"></td></tr>
+      <tr><td colspan="2"><b>Dívidas negociadas</b></td><td class="num"><b>${fmtBRL(dividas)}</b></td><td colspan="2"></td></tr>
+      <tr><td colspan="2"><b>Total do mês</b></td><td class="num"><b style="color:var(--accent)">${fmtBRL(compromissos)}</b></td><td colspan="2"></td></tr>
       </tbody></table></div>`
-    : `<div class="empty"><span class="big">📄</span>Nenhuma conta fixa ainda. Clique em <b>Nova conta fixa</b> para cadastrar (aluguel, luz, internet, assinaturas…).</div>`}
+    : `<div class="empty"><span class="big">📄</span>Nenhum compromisso em ${monthLabel(mk)}. Cadastre contas fixas ou dívidas com vencimento.</div>`}
   </div>
 
-  ${budgets.length ? budgetInsightBanner(budgetTotal, spentBudgeted, monthPct) : ""}`;
+  ${budgets.length && isCurrent ? budgetInsightBanner(budgetTotal, spentBudgeted, monthPct) : ""}`;
 }
 
 function budgetDonut(mks) {
@@ -2846,6 +2888,8 @@ function attachHandlers() {
   document.querySelectorAll("[data-rm-cat-in]").forEach(b => b.onclick = () => { if (confirm("Remover a categoria \"" + b.dataset.rmCatIn + "\"?")) removeCustomCat("entrada", b.dataset.rmCatIn); });
 
   // orçamento
+  const budM = $("#budMonth");
+  if (budM) budM.onchange = () => { budYM = budM.value; render(); };
   ["btnSetBudgets", "btnSetBudgets2", "btnSetBudgets3"].forEach(id => $("#" + id) && ($("#" + id).onclick = modalBudgets));
   ["btnBudgetAI", "btnBudgetAI2"].forEach(id => $("#" + id) && ($("#" + id).onclick = budgetSuggestAI));
 
