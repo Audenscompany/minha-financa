@@ -19,6 +19,8 @@ let unsubs = [];
 let chatHistory = [];
 let receiptDraft = null;
 let dashPeriod = "mes"; // mes | mesPassado | m3 | m6 | ano
+let flowRange = "12";   // 6 | 12 | ano  (gráfico de fluxo)
+let analysisPeriod = "mes"; // mes | m3 | m6 (análise de gastos)
 
 const CATS_OUT_BASE = ["Alimentação","Mercado","Moradia","Contas (água/luz/net)","Transporte","Saúde","Educação","Lazer","Assinaturas","Vestuário","Pet","Dívidas","Impostos/Taxas","Outros"];
 const CATS_IN_BASE = ["Salário/Pró-labore","Vendas","Freelance","Rendimentos","Reembolso","Outros"];
@@ -396,16 +398,20 @@ function investedInMonths(mks) {
 function periodLabel(p) { return (PERIODS.find(x => x[0] === p) || [])[1] || "período"; }
 
 // delta com tratamento de base zero / primeiro período (item 9)
-function deltaCtx(cur, prev, { goodDown = false } = {}) {
+function deltaCtx(cur, prev, { goodDown = false, light = false } = {}) {
+  const muted = light ? 'style="opacity:.8"' : 'class="muted"';
   if (prev === 0 || prev == null) {
-    if (!cur) return { html: `<span class="trend flat">—</span>` };
-    return { html: `<span class="trend flat">sem base anterior</span>` };
+    if (!cur) return { html: `<span ${light ? 'style="opacity:.85"' : 'class="trend flat"'}>—</span>` };
+    return { html: `<span ${light ? 'style="opacity:.85"' : 'class="trend flat"'}>sem base anterior</span>` };
   }
   const pct = (cur - prev) / Math.abs(prev) * 100;
   const isGood = goodDown ? pct <= 0 : pct >= 0;
   const arrow = pct > 0.5 ? "↑" : pct < -0.5 ? "↓" : "→";
   const cls = Math.abs(pct) < 0.5 ? "flat" : (isGood ? "pos" : "neg");
-  return { html: `<span class="trend ${cls}">${arrow} ${Math.abs(pct).toFixed(1).replace(".", ",")}%</span> <span class="muted">vs período anterior</span>`, pct };
+  const col = light ? (cls === "pos" ? "#b6f0c0" : cls === "neg" ? "#ffc9c9" : "rgba(255,255,255,.85)") : "";
+  const trend = light ? `<span style="color:${col}; font-weight:600">${arrow} ${Math.abs(pct).toFixed(1).replace(".", ",")}%</span>`
+    : `<span class="trend ${cls}">${arrow} ${Math.abs(pct).toFixed(1).replace(".", ",")}%</span>`;
+  return { html: `${trend} <span ${muted}>vs período anterior</span>`, pct };
 }
 function sparkline(vals, accent = "var(--s2)") {
   if (!vals.length || Math.max(...vals) === 0) return "";
@@ -429,13 +435,13 @@ function viewDashboard() {
   const savings = cur.ins > 0 ? (cur.ins - cur.outs) / cur.ins * 100 : null;
   const invPer = investedInMonths(mks), prevInv = investedInMonths(prevMks);
   const plan = planCalc();
+  const u = upcoming(15), f = forecast();
   const alerts = buildAlerts();
+  const sc = financialScore();
   const nome = (user?.displayName || "").split(" ")[0] || "";
-  // sparklines dos últimos 6 meses (contexto de tendência)
-  const spk = lastMonths(6);
-  const sparkOut = spk.map(m => monthTotals(m).outs);
-  const sparkIn = spk.map(m => monthTotals(m).ins);
   const savingsGoal = SETTINGS.savingsGoalPct ?? 30;
+  const sparkOut = lastMonths(7).map(m => monthTotals(m).outs);
+  const dsel = (id, opts, val) => `<select class="mini" data-sel="${id}">${opts.map(([k, l]) => `<option value="${k}" ${val === k ? "selected" : ""}>${l}</option>`).join("")}</select>`;
 
   return `
   <div class="dash-head">
@@ -449,95 +455,174 @@ function viewDashboard() {
     </div>
   </div>
 
-  <!-- CAMADA 1: situação atual -->
-  <div class="kpi-hero">
-    <div class="kpi hero">
-      <div class="k-label">Resultado ${mks.length > 1 ? "do período" : "do mês"}</div>
-      <div class="k-val" style="color:${saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(saldo)}</div>
-      <div class="k-ctx">${deltaCtx(saldo, prevSaldo).html}</div>
+  <!-- Linha 1: hero + KPIs -->
+  <div class="hero-grid">
+    <div class="home-hero">
+      <div class="hh-ico">${icon("activity", 20)}</div>
+      <div class="hh-label">Resultado ${mks.length > 1 ? "do período" : "do mês"} <span title="Recebido menos gasto no período selecionado." style="opacity:.8; cursor:help">ⓘ</span></div>
+      <div class="hh-val">${fmtBRL(saldo)}</div>
+      <div class="hh-delta">${deltaCtx(saldo, prevSaldo, { plain: true, light: true }).html}</div>
+      <div class="hh-bg">${heroBg()}</div>
     </div>
-    <div class="kpi">
-      <div class="k-label">Recebido</div>
-      <div class="k-val">${fmtBRL0(cur.ins)}</div>
-      <div class="k-ctx">${deltaCtx(cur.ins, prev.ins).html}</div>
-      ${p === "mes" ? sparkline(sparkIn, "var(--s1)") : ""}
+    <div class="kpi-card">
+      <div class="badge-ic g">${icon("trend-down")}</div>
+      <div class="kc-label">Recebido</div>
+      <div class="kc-val">${fmtBRL(cur.ins)}</div>
+      <div class="kc-ctx">${cur.ins ? deltaCtx(cur.ins, prev.ins).html : "—"}</div>
     </div>
-    <div class="kpi">
-      <div class="k-label">Gasto</div>
-      <div class="k-val">${fmtBRL0(cur.outs)}</div>
-      <div class="k-ctx">${deltaCtx(cur.outs, prev.outs, { goodDown: true }).html}</div>
-      ${p === "mes" ? sparkline(sparkOut, "var(--s2)") : ""}
+    <div class="kpi-card">
+      <div class="badge-ic r">${icon("trend-up")}</div>
+      <div class="kc-label">Gasto</div>
+      <div class="kc-val">${fmtBRL(cur.outs)}</div>
+      <div class="kc-ctx">${deltaCtx(cur.outs, prev.outs, { goodDown: true }).html}</div>
+      <div class="kc-spark">${sparkline(sparkOut, "var(--s2)")}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="badge-ic b">${icon("pie")}</div>
+      <div class="kc-label">Taxa de economia</div>
+      <div class="kc-val">${savings == null ? "—" : savings.toFixed(0) + "%"}</div>
+      <div class="kc-ctx">${savings == null ? "sem receita no período" : `meta ${savingsGoal}% ${savings >= savingsGoal ? '· <span class="trend pos">✓ batida</span>' : ""}`}</div>
     </div>
   </div>
 
-  <div class="kpi-row section-gap">
-    <div class="kpi">
-      <div class="k-label">Taxa de economia</div>
-      <div class="k-val">${savings == null ? "—" : savings.toFixed(0) + "%"}</div>
-      <div class="k-ctx">${savings == null ? "sem receita no período" : `meta: ${savingsGoal}% ${savings >= savingsGoal ? '<span class="trend pos">✓ batida</span>' : `<span class="muted">(faltam ${(savingsGoal - savings).toFixed(0)} p.p.)</span>`}`}</div>
+  <!-- Linha 2: a vencer / investido / projetado / alertas -->
+  <div class="row4">
+    <div class="kpi-card">
+      <div class="badge-ic b">${icon("file")}</div>
+      <div class="kc-label">A vencer (15 dias)</div>
+      <div class="kc-val">${fmtBRL0(u.total)}</div>
+      <div class="kc-ctx">${u.count ? u.count + " conta(s)" : "nada a vencer"}</div>
     </div>
-    <div class="kpi">
-      <div class="k-label">A vencer (15 dias)</div>
-      ${(() => { const u = upcoming(15); return `<div class="k-val">${fmtBRL0(u.total)}</div><div class="k-ctx">${u.count ? u.count + " conta(s)" : "nada a vencer"}</div>`; })()}
+    <div class="kpi-card">
+      <div class="badge-ic v">${icon("trend-up")}</div>
+      <div class="kc-label">Investido no período</div>
+      <div class="kc-val">${fmtBRL0(invPer)}</div>
+      <div class="kc-ctx">${p === "mes" ? "meta de aporte: " + fmtBRL0(plan.pmt) : deltaCtx(invPer, prevInv).html}</div>
     </div>
-    <div class="kpi">
-      <div class="k-label">Investido no período</div>
-      <div class="k-val">${fmtBRL0(invPer)}</div>
-      <div class="k-ctx">${p === "mes" ? `meta de aporte: ${fmtBRL0(plan.pmt)}` : deltaCtx(invPer, prevInv).html}</div>
+    <div class="kpi-card">
+      <div class="badge-ic g">${icon("wallet")}</div>
+      <div class="kc-label">Saldo projetado</div>
+      <div class="kc-val" style="color:${f.saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL0(f.saldo)}</div>
+      <div class="kc-ctx">estimativa até o fim do mês</div>
     </div>
-    ${p === "mes" ? `<div class="kpi">
-      <div class="k-label">Saldo projetado <span title="Estimativa: recebido + receita esperada − gastos − contas a vencer no mês. Não é saldo bancário." style="cursor:help; color:var(--ink-3)">ⓘ</span></div>
-      ${(() => { const f = forecast(); return `<div class="k-val" style="color:${f.saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL0(f.saldo)}</div><div class="k-ctx">estimativa até o fim do mês</div>`; })()}
-    </div>` : ""}
+    <div class="alert-card">
+      ${alerts.length ? alerts.slice(0, 2).map(miniAlertHTML).join("") :
+        `<div class="mini-alert pos"><span class="ma-ic">${icon("shield")}</span><div class="ma-b"><div class="ma-t">Tudo em ordem</div><div class="ma-d">Nenhum alerta no momento</div></div></div>`}
+    </div>
   </div>
 
-  ${alerts.length ? `<div class="card section-gap">
-    <div class="flex spread" style="margin-bottom:12px"><h3>Precisa da sua atenção</h3></div>
-    <div class="alerts">${alerts.map(alertHTML).join("")}</div>
-  </div>` : ""}
-
-  ${dashScoreCard()}
-
-  <!-- CAMADA 2: tendência -->
-  <div class="grid two-col section-gap">
-    <div class="card chart-card">
-      <h3>Fluxo financeiro</h3>
-      <div class="chart-sub">Entradas, saídas e saldo — ${mks.length > 1 ? "no período" : "últimos 6 meses"}</div>
+  <!-- Linha 3: fluxo / análise / saúde -->
+  <div class="panel-3">
+    <div class="panel">
+      <div class="panel-head"><h3>Fluxo financeiro</h3>
+        ${dsel("flow", [["6", "Últimos 6 meses"], ["12", "Últimos 12 meses"], ["ano", "Este ano"]], flowRange)}</div>
       <div class="legend">
-        <span class="key"><span class="swatch" style="background:var(--s1)"></span>Entradas</span>
-        <span class="key"><span class="swatch" style="background:var(--s2)"></span>Saídas</span>
-        <span class="key"><span class="swatch" style="background:var(--s7); border-radius:2px; height:3px"></span>Saldo</span>
+        <span class="key"><span class="swatch" style="background:var(--good)"></span>Entradas</span>
+        <span class="key"><span class="swatch" style="background:var(--critical)"></span>Saídas</span>
+        <span class="key"><span class="swatch" style="background:var(--s1); border-radius:50%; width:9px; height:9px"></span>Saldo</span>
       </div>
-      ${chartFlow(mks.length > 1 ? mks : lastMonths(6))}
+      ${chartFlowDiverging(flowMonths())}
     </div>
-    <div class="card chart-card">
-      <h3>Para onde foi seu dinheiro</h3>
-      <div class="chart-sub">${mks.length > 1 ? periodLabel(p) : monthLabel(mks[0])} · toque numa categoria para ver as transações</div>
-      ${chartCats(mks)}
+    <div class="panel">
+      <div class="panel-head"><h3>Análise de gastos</h3>
+        ${dsel("analysis", [["mes", "Este mês"], ["m3", "3 meses"], ["m6", "6 meses"]], analysisPeriod)}</div>
+      ${donutBlock(periodMonths(analysisPeriod))}
+      <button class="panel-link" data-goto="orcamento">Ver todas as categorias →</button>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Saúde financeira</h3></div>
+      <div class="semi-wrap">
+        ${semiGauge(sc.total, sc.band)}
+        <span class="semi-pill" style="background:${scoreColor(sc.band)}22; color:${scoreColor(sc.band)}">${sc.band.lbl}</span>
+        <div class="muted" style="margin-top:6px; font-size:13px">${sc.total >= 60 ? "Você está no caminho certo." : sc.total >= 40 ? "Seu resultado precisa de ajustes." : "Seu resultado está abaixo do ideal."}</div>
+        <div class="muted" style="font-size:12px">${(() => { const i = generateInsights()[0]; return i ? esc(i.title) : "Registre transações para gerar insights"; })()}</div>
+        <button class="panel-link" data-goto="saude">Ver detalhes da saúde →</button>
+      </div>
     </div>
   </div>
 
-  ${p === "mes" ? forecastBlock() : ""}
-
-  <!-- CAMADA 5: metas -->
-  <div class="card section-gap">
-    <div class="flex spread">
-      <div><h3>Meta patrimonial</h3>
-      <div class="chart-sub">Faltam ${plan.monthsLeft} meses · aporte necessário <b>${fmtBRL0(plan.pmt)}/mês</b></div></div>
-      <button class="btn secondary small" data-goto="plano">Ver plano →</button>
-    </div>
-    <div class="flex spread" style="align-items:flex-end; margin:8px 0 6px">
-      <div style="font-size:22px; font-weight:650">${fmtBRL0(plan.current)} <span class="muted" style="font-size:14px; font-weight:500">de ${fmtBRL0(plan.goal)}</span></div>
-      <div style="font-weight:650; color:var(--accent)">${plan.pct.toFixed(1)}%</div>
-    </div>
-    <div class="meter good"><div style="width:${plan.pct}%"></div></div>
-  </div>
-
-  <div class="card section-gap">
-    <div class="flex spread"><h3>Últimas transações</h3>
-      <button class="btn secondary small" data-goto="transacoes">Ver extrato →</button></div>
-    ${tableTx(TX.slice(0, 6), false)}
+  <div class="tip-banner">
+    <div class="tb-ic">${icon("shield")}</div>
+    <div class="tb-b"><div class="tb-t">${tipOfDay().t}</div><div class="tb-d">${tipOfDay().d}</div></div>
+    <button class="btn" data-goto="${tipOfDay().goto}">${tipOfDay().cta}</button>
   </div>`;
+}
+
+function flowMonths() {
+  if (flowRange === "6") return lastMonths(6);
+  if (flowRange === "12") return lastMonths(12);
+  return periodMonths("ano");
+}
+function tipOfDay() {
+  const dt = debtTotals();
+  if (dt.open > 0) return { t: "Foco em quitar dívidas", d: "Você tem dívidas em aberto. Use a aba Dívidas para negociar e montar acordos.", cta: "Ver dívidas", goto: "dividas" };
+  if (!getBudgets().length) return { t: "Defina seus limites", d: "Configure um orçamento por categoria para acompanhar seus gastos.", cta: "Criar orçamento", goto: "orcamento" };
+  return { t: "Dica do dia", d: "Registre seus gastos assim que acontecem — fotografe o comprovante e a IA lança pra você.", cta: "Ler comprovante", goto: "comprovante" };
+}
+function miniAlertHTML(a) {
+  return `<button class="mini-alert ${a.level}" data-goto="${a.goto}">
+    <span class="ma-ic">${icon(a.level === "pos" ? "shield" : a.level === "info" ? "activity" : "file")}</span>
+    <div class="ma-b"><div class="ma-t">${esc(a.title)}</div><div class="ma-d">${esc(a.desc)}</div></div>
+    <span class="ma-chev">${icon("more", 16)}</span></button>`;
+}
+
+// ---- Fundo do hero (linha de saldo, 12 meses) ----
+function heroBg() {
+  const vals = lastMonths(12).map(m => { const t = monthTotals(m); return t.ins - t.outs; });
+  const W = 520, H = 70, min = Math.min(...vals, 0), max = Math.max(...vals, 1), rng = (max - min) || 1;
+  const x = i => i / (vals.length - 1) * W, y = v => H - 6 - (v - min) / rng * (H - 12);
+  const line = vals.map((v, i) => (i ? "L" : "M") + x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" ");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">
+    <path d="${line} L${W},${H} L0,${H} Z" fill="#fff" opacity=".15"/>
+    <path d="${line}" fill="none" stroke="#fff" stroke-width="2"/></svg>`;
+}
+
+// ---- Rosca (donut) de gastos por categoria ----
+function polar(cx, cy, r, deg) { const a = deg * Math.PI / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; }
+function donutBlock(mks) {
+  const all = catSpendMonths(mks);
+  const total = all.reduce((a, [, v]) => a + v, 0);
+  if (!total) return `<div class="empty" style="padding:30px 10px"><span class="big">🍃</span>Nenhum gasto no período.</div>`;
+  const top = all.slice(0, 5), restV = all.slice(5).reduce((a, [, v]) => a + v, 0);
+  const items = restV > 0 ? [...top, ["Outros", restV]] : top;
+  const cols = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s7)", "var(--s5)", "var(--s4)"];
+  const cx = 80, cy = 80, R = 72, r = 46; let a0 = -90, paths = "";
+  items.forEach(([, v], i) => {
+    const a1 = a0 + v / total * 360;
+    const large = (a1 - a0) > 180 ? 1 : 0;
+    const [x0, y0] = polar(cx, cy, R, a0), [x1, y1] = polar(cx, cy, R, a1);
+    const [x2, y2] = polar(cx, cy, r, a1), [x3, y3] = polar(cx, cy, r, a0);
+    paths += `<path d="M${x0.toFixed(1)} ${y0.toFixed(1)} A${R} ${R} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)} L${x2.toFixed(1)} ${y2.toFixed(1)} A${r} ${r} 0 ${large} 0 ${x3.toFixed(1)} ${y3.toFixed(1)} Z" fill="${cols[i % cols.length]}" stroke="var(--surface-1)" stroke-width="2.5"/>`;
+    a0 = a1;
+  });
+  const donut = `<svg viewBox="0 0 160 160" width="160" height="160" style="flex-shrink:0">${paths}
+    <text x="80" y="74" text-anchor="middle" font-size="10" fill="var(--ink-3)">Total gasto</text>
+    <text x="80" y="90" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink-1)">${fmtBRL0(total)}</text>
+    <text x="80" y="104" text-anchor="middle" font-size="10" fill="var(--ink-3)">100%</text></svg>`;
+  const legend = `<div class="donut-legend">${items.map(([c, v], i) => `
+    <button class="dl-row cat-row" data-cat-detail="${esc(c)}" style="display:grid">
+      <span class="dl-dot" style="background:${cols[i % cols.length]}"></span>
+      <span style="text-align:left">${esc(c)}</span>
+      <span class="dl-val">${fmtBRL0(v)}</span>
+      <span class="dl-pct">${(v / total * 100).toFixed(1)}%</span>
+    </button>`).join("")}</div>`;
+  return `<div class="flex" style="gap:16px; align-items:center; flex-wrap:wrap; justify-content:center">${donut}${legend}</div>`;
+}
+
+// ---- Gauge semicircular (score de saúde) ----
+function semiArc(cx, cy, R, a0, a1, color, w) {
+  const [x0, y0] = polar(cx, cy, R, a0), [x1, y1] = polar(cx, cy, R, a1);
+  const large = Math.abs(a1 - a0) > 180 ? 1 : 0;
+  return `<path d="M${x0.toFixed(1)} ${y0.toFixed(1)} A${R} ${R} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linecap="round"/>`;
+}
+function semiGauge(score, band) {
+  const cx = 90, cy = 96, R = 74, col = scoreColor(band);
+  const end = 180 + 180 * Math.max(0, Math.min(100, score)) / 100;
+  return `<svg viewBox="0 0 180 118" width="180" height="118">
+    ${semiArc(cx, cy, R, 180, 360, "var(--grid)", 13)}
+    ${semiArc(cx, cy, R, 180, end, col, 13)}
+    <text x="90" y="86" text-anchor="middle" font-size="34" font-weight="700" fill="${col}">${score}</text>
+    <text x="90" y="104" text-anchor="middle" font-size="11" fill="var(--ink-3)">de 100</text></svg>`;
 }
 
 function dashScoreCard() {
@@ -634,6 +719,48 @@ function alertHTML(a) {
 }
 
 // ---- Gráfico de fluxo: barras entradas/saídas + linha de saldo (SVG) ----
+// ---- Fluxo divergente: entradas ↑ (verde), saídas ↓ (vermelho), linha de saldo ----
+function chartFlowDiverging(mks) {
+  const data = mks.map(mk => { const t = monthTotals(mk); return { mk, ins: t.ins, outs: t.outs, saldo: t.ins - t.outs }; });
+  const n = data.length;
+  const maxAbs = Math.max(1, ...data.flatMap(d => [d.ins, d.outs, Math.abs(d.saldo)]));
+  const step = niceStep(maxAbs);
+  const W = 620, H = 300, padL = 44, padB = 24, padT = 10, padR = 6;
+  const plotH = H - padB - padT, cy = padT + plotH / 2;
+  const half = plotH / 2;
+  const bandW = (W - padL - padR) / n;
+  const barW = Math.min(16, bandW * 0.4);
+  const y = v => cy - v / maxAbs * half;
+  const curMK = todayISO().slice(0, 7);
+  let grid = "";
+  for (let g = step; g <= maxAbs; g += step) {
+    for (const s of [1, -1]) grid += `<line x1="${padL}" x2="${W - padR}" y1="${y(g*s)}" y2="${y(g*s)}" stroke="var(--grid)"/><text x="${padL - 6}" y="${y(g*s)+3}" font-size="9.5" fill="var(--ink-3)" text-anchor="end">${(s<0?"-":"")+compact(g)}</text>`;
+  }
+  let bars = "", pts = [];
+  data.forEach((d, i) => {
+    const cx = padL + bandW * i + bandW / 2;
+    if (d.ins > 0) bars += barSeg(cx - barW / 2, y(d.ins), barW, cy - y(d.ins), "var(--good)", `${monthLabel(d.mk)}|Entradas|${d.ins}`, "top");
+    if (d.outs > 0) bars += barSeg(cx - barW / 2, cy, barW, y(-d.outs) - cy, "var(--critical)", `${monthLabel(d.mk)}|Saídas|${d.outs}`, "bot");
+    const lbl = d.mk.slice(5) === curMK.slice(5) && d.mk === curMK;
+    bars += `<text x="${cx}" y="${H - 7}" font-size="10" fill="var(--ink-3)" text-anchor="middle" ${lbl ? 'font-weight="700"' : ''}>${["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"][+d.mk.split("-")[1]-1]}</text>`;
+    pts.push([cx, y(d.saldo)]);
+  });
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const dots = pts.map((p, i) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="var(--s1)" stroke="var(--surface-1)" stroke-width="1.5" class="has-tip" data-tip="${monthLabel(data[i].mk)}|Saldo|${data[i].saldo}"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto" role="img" aria-label="Fluxo de entradas, saídas e saldo">
+    ${grid}
+    <line x1="${padL}" x2="${W - padR}" y1="${cy}" y2="${cy}" stroke="var(--baseline)" stroke-width="1.5"/>
+    ${bars}
+    <path d="${line}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round"/>
+    ${dots}</svg>`;
+}
+function barSeg(x, y, w, h, fill, tip, side) {
+  if (h <= 0.5) return "";
+  const r = Math.min(3, h);
+  if (side === "top") return `<path d="M${x},${y+h} L${x},${y+r} Q${x},${y} ${x+r},${y} L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z" fill="${fill}" class="has-tip" data-tip="${tip}"/>`;
+  return `<path d="M${x},${y} L${x+w},${y} L${x+w},${y+h-r} Q${x+w},${y+h} ${x+w-r},${y+h} L${x+r},${y+h} Q${x},${y+h} ${x},${y+h-r} Z" fill="${fill}" class="has-tip" data-tip="${tip}"/>`;
+}
+
 function chartFlow(mks) {
   const data = mks.map(mk => { const t = monthTotals(mk); return { mk, ins: t.ins, outs: t.outs, saldo: t.ins - t.outs }; });
   const n = data.length;
@@ -695,7 +822,7 @@ function chartCats(mks) {
     </button>`).join("") + `</div>`;
 }
 function modalCatDetail(cat) {
-  const mks = periodMonths(dashPeriod);
+  const mks = periodMonths(analysisPeriod);
   const rows = TX.filter(t => t.type === "saida" && t.category === cat && mks.includes(monthKey(t.date)))
     .sort((a, b) => b.amount - a.amount);
   const total = rows.reduce((a, t) => a + t.amount, 0);
@@ -2091,9 +2218,14 @@ function attachHandlers() {
   document.querySelectorAll("[data-goto]").forEach(b => b.onclick = e => { e.preventDefault(); switchView(b.dataset.goto); });
   $("#btnQuickAdd") && ($("#btnQuickAdd").onclick = () => modalTx());
 
-  // dashboard: seletor de período global + drill-down de categoria
+  // dashboard: seletor de período global + drill-down de categoria + selects dos painéis
   document.querySelectorAll("[data-period]").forEach(b => b.onclick = () => { dashPeriod = b.dataset.period; render(); });
   document.querySelectorAll("[data-cat-detail]").forEach(b => b.onclick = () => modalCatDetail(b.dataset.catDetail));
+  document.querySelectorAll("[data-sel]").forEach(s => s.onchange = () => {
+    if (s.dataset.sel === "flow") flowRange = s.value;
+    if (s.dataset.sel === "analysis") analysisPeriod = s.value;
+    render();
+  });
 
   // transações
   const fMonth = $("#fMonth");
