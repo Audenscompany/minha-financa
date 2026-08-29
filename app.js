@@ -1202,7 +1202,8 @@ function debtCalItems(ym) {
   const lastDay = new Date(Y, M, 0).getDate();
   const out = [];
   for (const d of DEBTS) {
-    if (d.status === "quitada" || !(d.monthlyPayment > 0) || !d.dueDay || withBill.has(d.id)) continue;
+    // só dívidas NEGOCIADAS (status "acordo") com parcela e dia definidos entram como compromisso do mês
+    if (d.status !== "acordo" || !(d.monthlyPayment > 0) || !d.dueDay || withBill.has(d.id)) continue;
     const day = Math.min(d.dueDay, lastDay);
     out.push({ name: d.name, amount: d.monthlyPayment, category: "Dívidas",
       dueDate: `${ym}-${String(day).padStart(2, "0")}`, debtId: d.id, isDebt: true });
