@@ -278,6 +278,43 @@ function debtTotals() {
 function investedTotal() {
   return INVEST.reduce((a, i) => a + (i.type === "resgate" ? -i.amount : i.amount), 0);
 }
+// Patrimônio líquido = investido − dívidas em aberto
+function netWorth() {
+  const inv = investedTotal();
+  const debt = debtTotals().open;
+  return { inv, debt, net: inv - debt };
+}
+// Base mensal da reserva: gastos essenciais reais, ou estimativa por contas fixas / renda
+function reserveMonthlyBase() {
+  const ess = avgEssentials();
+  if (ess > 0) return { base: ess, src: "seus gastos essenciais médios" };
+  const fx = fixedMonthlyTotal();
+  if (fx > 0) return { base: fx * 1.6, src: "estimado pelas suas contas fixas" };
+  const inc = SETTINGS.incomeTarget || avgIncome();
+  return { base: inc * 0.5, src: "estimado (50% da renda) — ajuste depois" };
+}
+function emergencyStats() {
+  const months = SETTINGS.emergencyMonths ?? 6;
+  const { base, src } = reserveMonthlyBase();
+  const target = months * base;
+  const cur = SETTINGS.emergencyFund || 0;
+  const pct = target > 0 ? Math.min(100, cur / target * 100) : 0;
+  const covered = base > 0 ? cur / base : 0;
+  return { months, base, src, target, cur, pct, covered, falta: Math.max(0, target - cur) };
+}
+// Ritmo real de aporte: média dos meses (dos últimos n) em que houve aporte
+function avgAporte(n = 3) {
+  const vals = lastMonths(n).map(mk => investedInMonths([mk])).filter(v => v > 0);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+}
+// No ritmo `pmt`/mês, em quantos meses o patrimônio atinge a meta
+function paceToGoal(pmt) {
+  const p = planCalc();
+  if (pmt <= 0) return { months: Infinity, hits: false };
+  let v = p.current, m = 0;
+  while (v < p.goal && m < 1200) { v = v * (1 + p.rate) + pmt; m++; }
+  return { months: m, hits: v >= p.goal, end: new Date(Date.now() + m * 30.44 * 864e5) };
+}
 const INV_REND = new Set(["rendimento", "dividendo"]);
 function investStats() {
   let aportes = 0, resgates = 0, rend = 0;
@@ -606,6 +643,14 @@ function viewDashboard() {
     </div>
   </div>
 
+  <div class="card section-gap">
+    <div class="flex spread" style="flex-wrap:wrap; gap:10px">
+      <div><h3>🧾 Fechamento do mês</h3><div class="muted" style="font-size:13px; margin-top:2px">Resumo do mês pela IA: o que entrou, o que saiu, como está vs. orçamento e as dívidas — com uma recomendação para o próximo mês.</div></div>
+      <button class="btn" id="btnMonthClose" ${hasAIKey() ? "" : "disabled"}>Gerar fechamento</button>
+    </div>
+    <div id="monthCloseBox" class="section-gap hidden"></div>
+  </div>
+
   <div class="tip-banner">
     <div class="tb-ic">${icon("shield")}</div>
     <div class="tb-b"><div class="tb-t">${tipOfDay().t}</div><div class="tb-d">${tipOfDay().d}</div></div>
@@ -772,6 +817,14 @@ function buildAlerts() {
   const prevMk = lastMonths(2)[0], out0 = monthTotals(mk).outs, prevOut = monthTotals(prevMk).outs;
   if (prevOut > 0 && out0 < prevOut * 0.9 && new Date().getDate() >= 25) out.push({ level: "pos", ico: "✓", title: "Gastos em queda",
     desc: `Despesas ${((1 - out0 / prevOut) * 100).toFixed(0)}% menores que ${monthLabel(prevMk)}`, goto: "transacoes", act: "Ver" });
+  // ATENÇÃO: contas vencendo nos próximos 5 dias
+  const soon = pendingBills().filter(b => b.dueDate && b.dueDate >= today && (new Date(b.dueDate) - new Date(today)) / 864e5 <= 5);
+  if (soon.length) out.push({ level: "info", ico: "i", title: `${soon.length} conta(s) vencem em breve`,
+    desc: `${fmtBRL0(soon.reduce((a, b) => a + b.amount, 0))} nos próximos 5 dias`, goto: "calendario", act: "Ver" });
+  // INFO: reserva de emergência baixa
+  const em = emergencyStats();
+  if (em.target > 0 && em.pct < 50) out.push({ level: "info", ico: "i", title: "Reserva de emergência baixa",
+    desc: `${fmtBRL0(em.cur)} guardados (${em.covered.toFixed(1)} meses) · meta ${fmtBRL0(em.target)}`, goto: "plano", act: "Ver" });
   const order = { crit: 0, warn: 1, info: 2, pos: 3 };
   return out.sort((a, b) => order[a.level] - order[b.level]).slice(0, 4);
 }
@@ -1841,11 +1894,59 @@ function viewPlano() {
   const p = planCalc();
   const renda = avgIncome();
   const pctRenda = renda > 0 ? p.pmt / renda * 100 : 0;
+  const nw = netWorth();
+  const em = emergencyStats();
+  const pace = avgAporte(3);
   return `
   <div class="view-head">
-    <div><h2>🎯 Plano Milionário — ${SETTINGS.goalYears || 5} anos</h2>
+    <div><h2>🎯 Patrimônio & Meta — ${SETTINGS.goalYears || 5} anos</h2>
     <div class="sub">Meta: ${fmtBRL0(p.goal)} até ${p.end.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}</div></div>
     <button class="btn secondary" id="btnEditGoal">Ajustar meta</button>
+  </div>
+
+  <div class="bkpi-grid">
+    <div class="bkpi"><div class="bk-label">Patrimônio líquido</div>
+      <div class="bk-val" style="color:${nw.net >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL0(nw.net)}</div>
+      <div class="bk-foot"><span class="ico">${icon("target")}</span> investido − dívidas</div></div>
+    <div class="bkpi"><div class="bk-label">Investido</div>
+      <div class="bk-val">${fmtBRL0(nw.inv)}</div>
+      <div class="bk-foot"><span class="ico">${icon("trend-up")}</span> sua carteira hoje</div></div>
+    <div class="bkpi"><div class="bk-label">Dívidas em aberto</div>
+      <div class="bk-val" style="color:${nw.debt > 0 ? "var(--critical)" : "var(--ink-1)"}">${fmtBRL0(nw.debt)}</div>
+      <div class="bk-foot"><span class="ico">${icon("trend-down")}</span> ${DEBTS.filter(d => d.status !== "quitada").length} dívida(s) ativa(s)</div></div>
+  </div>
+
+  <div class="card section-gap">
+    <div class="flex spread" style="flex-wrap:wrap; gap:16px; align-items:center">
+      <div style="display:flex; align-items:center; gap:16px">
+        <div style="position:relative; width:92px; height:92px; flex-shrink:0">
+          ${ringGauge(em.pct)}
+          <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center"><b style="font-size:17px">${em.pct.toFixed(0)}%</b></div>
+        </div>
+        <div>
+          <h3 style="margin:0">🛡️ Reserva de emergência</h3>
+          <div class="chart-sub" style="margin-top:3px">${fmtBRL0(em.cur)} de ${fmtBRL0(em.target)} · cobre <b>${em.covered.toFixed(1)} ${em.covered === 1 ? "mês" : "meses"}</b> de despesas</div>
+          <div class="muted" style="font-size:12px; margin-top:2px">Meta: ${em.months} meses (${em.src})</div>
+        </div>
+      </div>
+      <button class="btn" id="btnEmergency">Atualizar reserva</button>
+    </div>
+    ${em.pct < 100
+      ? `<div class="ai-box" style="margin-top:12px; font-size:13px">${em.cur === 0 ? "💡 Comece sua reserva. " : `Faltam <b>${fmtBRL0(em.falta)}</b> para completar. `}Ter essa reserva antes de investir com agressividade te protege de voltar a recorrer a dívidas numa emergência.</div>`
+      : `<div class="ai-box" style="margin-top:12px; font-size:13px; background:var(--good-soft, rgba(40,160,90,.1))">✅ Reserva completa! ${em.covered.toFixed(0)} meses cobertos. Agora é focar nos aportes para a meta.</div>`}
+  </div>
+
+  <div class="card section-gap">
+    <h3>📈 Seu ritmo atual</h3>
+    ${pace <= 0
+      ? `<p class="muted" style="margin-top:6px">Você ainda não tem histórico de aportes. Assim que começar a investir, eu projeto aqui em quanto tempo você chega no seu ${fmtBRL0(p.goal)} no ritmo real.</p>`
+      : (() => {
+          const r = paceToGoal(pace), anos = r.months / 12, noPrazo = r.months <= p.monthsLeft;
+          return `<div class="chart-sub" style="margin-top:6px">Aportando sua média real de <b>${fmtBRL0(pace)}/mês</b>, você atinge ${fmtBRL0(p.goal)} em <b>${anos < 100 ? anos.toFixed(1) + " anos" : "mais de 100 anos"}</b>${r.hits && anos < 100 ? ` (${r.end.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })})` : ""}.</div>
+            <div class="ai-box" style="margin-top:10px; font-size:13px; ${noPrazo ? "background:var(--good-soft, rgba(40,160,90,.1))" : ""}">${noPrazo
+              ? `✅ No ritmo atual você bate a meta <b>dentro do prazo</b> de ${SETTINGS.goalYears || 5} anos. Excelente!`
+              : `⚠️ Para bater em ${SETTINGS.goalYears || 5} anos, o ideal é aportar <b>${fmtBRL0(p.pmt)}/mês</b> — ${fmtBRL0(Math.max(0, p.pmt - pace))} a mais que sua média atual.`}</div>`;
+        })()}
   </div>
 
   <div class="card">
@@ -2749,6 +2850,27 @@ function modalGoal() {
   };
 }
 
+function modalEmergency() {
+  const em = emergencyStats();
+  openModal(`
+    <h3>🛡️ Reserva de emergência</h3>
+    <p class="muted" style="margin:-4px 0 12px; font-size:13px">É o dinheiro guardado em algo líquido (conta, CDB de liquidez diária) para imprevistos. Informe quanto você já tem e quantos meses de despesa quer cobrir.</p>
+    <div class="field"><label>Quanto você já tem guardado (R$)</label><input id="emAmount" inputmode="decimal" value="${em.cur || ""}" placeholder="0,00"></div>
+    <div class="field"><label>Meta: meses de despesa cobertos</label>
+      <select id="emMonths">${[3,4,5,6,8,10,12].map(n => `<option value="${n}" ${em.months === n ? "selected" : ""}>${n} meses</option>`).join("")}</select>
+      <span class="hint">Base mensal considerada: ${fmtBRL0(em.base)} (${em.src}). Meta = meses × base.</span></div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Salvar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const patch = { emergencyFund: parseMoney($("#emAmount").value) || 0, emergencyMonths: +$("#emMonths").value || 6 };
+    try {
+      await setDoc(doc(db, "households", hid, "meta", "settings"), patch, { merge: true });
+      SETTINGS.emergencyFund = patch.emergencyFund; SETTINGS.emergencyMonths = patch.emergencyMonths;
+      closeModal(); toast("🛡️ Reserva atualizada.");
+    } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+
 // ============================================================
 // IA — Claude API
 // ============================================================
@@ -3106,6 +3228,23 @@ async function planAI() {
   } catch (e) { box.innerHTML = `<div class="ai-box">⚠️ ${esc(e.message)}</div>`; }
 }
 
+async function mensalClose() {
+  const box = $("#monthCloseBox"); if (!box) return;
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="ai-box loading-dots">🤖 Fechando o mês</div>`;
+  try {
+    const mk = todayISO().slice(0, 7);
+    const t = monthTotals(mk), prev = monthTotals(lastMonths(2)[0]);
+    const em = emergencyStats();
+    const reply = await callClaude({
+      maxTokens: 900,
+      system: SYSTEM_ADVISOR + "\n\n" + financialContext(),
+      messages: [{ role: "user", content: `Faça o FECHAMENTO do mês atual (${monthLabel(mk)}) em até 6 frases curtas, em texto corrido (sem listas). Cubra: 1) resultado do mês — entrou ${t.ins.toFixed(0)}, saiu ${t.outs.toFixed(0)}, saldo ${(t.ins - t.outs).toFixed(0)}, comparando com o mês anterior (saiu ${prev.outs.toFixed(0)}); 2) onde gastou mais e se estourou algum limite do orçamento; 3) aportes vs. a meta do mês; 4) reserva de emergência atual (${em.cur.toFixed(0)} de ${em.target.toFixed(0)}, cobre ${em.covered.toFixed(1)} meses); 5) situação das dívidas; 6) UMA recomendação prática para o próximo mês. Seja direto e específico com valores em reais.` }]
+    });
+    box.innerHTML = `<div class="ai-box">${esc(reply)}</div>`;
+  } catch (e) { box.innerHTML = `<div class="ai-box">⚠️ ${esc(e.message)}</div>`; }
+}
+
 // ============================================================
 // HANDLERS
 // ============================================================
@@ -3214,9 +3353,13 @@ function attachHandlers() {
   ["btnSetBudgets", "btnSetBudgets2", "btnSetBudgets3"].forEach(id => $("#" + id) && ($("#" + id).onclick = modalBudgets));
   ["btnBudgetAI", "btnBudgetAI2"].forEach(id => $("#" + id) && ($("#" + id).onclick = budgetSuggestAI));
 
-  // plano
+  // plano / patrimônio
   $("#btnEditGoal") && ($("#btnEditGoal").onclick = modalGoal);
   $("#btnPlanAI") && ($("#btnPlanAI").onclick = planAI);
+  $("#btnEmergency") && ($("#btnEmergency").onclick = modalEmergency);
+
+  // fechamento do mês (home)
+  $("#btnMonthClose") && ($("#btnMonthClose").onclick = mensalClose);
 
   // saúde financeira
   $("#btnScoreAI") && ($("#btnScoreAI").onclick = scoreAnaliseIA);
