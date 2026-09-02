@@ -1401,8 +1401,8 @@ function viewCalendario() {
 
   // contas a pagar por dia do mês = boletos + parcelas de dívidas ativas
   const items = [
-    ...pendingBills().filter(b => b.dueDate && monthKey(b.dueDate) === ym),
-    ...debtCalItems(ym)
+    ...pendingBills().filter(b => b.dueDate && monthKey(b.dueDate) === ym && !(b.paidMonths || []).includes(ym)),
+    ...debtCalItems(ym).filter(x => !x.paid)
   ];
   const byDay = {};
   for (const b of items) { const d = +b.dueDate.split("-")[2]; (byDay[d] = byDay[d] || []).push(b); }
@@ -1485,12 +1485,12 @@ function debtCalItems(ym) {
     if (d.status !== "acordo" || !(d.monthlyPayment > 0) || !d.dueDay || withBill.has(d.id)) continue;
     const day = Math.min(d.dueDay, lastDay);
     out.push({ name: d.name, amount: d.monthlyPayment, category: "Dívidas",
-      dueDate: `${ym}-${String(day).padStart(2, "0")}`, debtId: d.id, isDebt: true });
+      dueDate: `${ym}-${String(day).padStart(2, "0")}`, debtId: d.id, isDebt: true, paid: (d.paidMonths || []).includes(ym) });
   }
   return out;
 }
 function modalDayBills(iso) {
-  const list = [...pendingBills().filter(b => b.dueDate === iso), ...debtCalItems(iso.slice(0, 7)).filter(x => x.dueDate === iso)]
+  const list = [...pendingBills().filter(b => b.dueDate === iso && !(b.paidMonths || []).includes(iso.slice(0, 7))), ...debtCalItems(iso.slice(0, 7)).filter(x => x.dueDate === iso && !x.paid)]
     .sort((a, b) => b.amount - a.amount);
   const tot = list.reduce((a, b) => a + b.amount, 0);
   const d = new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
@@ -1667,6 +1667,62 @@ async function payBill(b) {
         else toast(`💪 Abatido ${fmtBRL(b.amount)} — restam ${fmtBRL(rest)} do acordo "${d.name}".`, 4500);
       }
     }
+  } catch (e) { toast("Erro: " + e.message); }
+}
+
+// Dar baixa num compromisso (conta fixa ou parcela de dívida) para um mês específico,
+// sem tirá-lo da recorrência. Opcionalmente lança a saída — desmarque se já lançou.
+function modalCommitPay(kind, id) {
+  const ym = budYM || todayISO().slice(0, 7);
+  const isDebt = kind === "divida";
+  const item = isDebt ? DEBTS.find(d => d.id === id) : BILLS.find(b => b.id === id);
+  if (!item) return toast("Item não encontrado.");
+  const amount = isDebt ? (item.monthlyPayment || 0) : item.amount;
+  openModal(`
+    <h3>Dar baixa — ${esc(item.name)}</h3>
+    <p class="muted" style="margin:-4px 0 12px; font-size:13px">Marcar como pago em <b>${monthLabel(ym)}</b>. Ele sai do total a pagar deste mês e não conta de novo.</p>
+    <div style="font-size:15px; margin-bottom:12px">Valor: <b>${fmtBRL(amount)}</b></div>
+    <label class="flex" style="gap:10px; cursor:pointer; padding:11px 12px; border:1px solid var(--border); border-radius:10px; align-items:flex-start">
+      <input type="checkbox" id="pcLaunch" checked style="width:18px;height:18px; margin-top:1px">
+      <span>Lançar como saída agora (${fmtBRL(amount)})<br><span class="muted" style="font-size:12px">Desmarque se você <b>já lançou</b> essa despesa (ex.: na fatura do cartão) — evita duplicar.</span></span>
+    </label>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Confirmar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const launch = $("#pcLaunch").checked;
+    try {
+      if (launch && amount > 0) {
+        await addDoc(collection(db, "households", hid, "transactions"), {
+          type: "saida", amount, date: todayISO(),
+          desc: (isDebt ? "Pagamento dívida: " : "Conta: ") + item.name,
+          category: isDebt ? "Dívidas" : (item.category || "Contas (água/luz/net)"),
+          method: isDebt ? "PIX" : "Boleto", createdBy: user.email, createdAt: new Date().toISOString()
+        });
+      }
+      const ref = isDebt ? doc(db, "households", hid, "debts", id) : doc(db, "households", hid, "bills", id);
+      const patch = { paidMonths: arrayUnion(ym) };
+      if (isDebt && launch) {
+        const paid = (item.paid || 0) + amount, rest = (item.currentValue ?? item.total) - paid;
+        patch.paid = paid;
+        if (rest <= 0.01) patch.status = "quitada";
+      }
+      await updateDoc(ref, patch);
+      // conta fixa que é parcela de acordo → abate a dívida vinculada
+      if (!isDebt && item.debtId && launch) {
+        const d = DEBTS.find(x => x.id === item.debtId);
+        if (d) { const paid = (d.paid || 0) + amount, rest = (d.currentValue ?? d.total) - paid; await updateDoc(doc(db, "households", hid, "debts", d.id), { paid, status: rest <= 0.01 ? "quitada" : d.status }); }
+      }
+      closeModal();
+      toast(launch ? `✅ ${fmtBRL(amount)} pago e lançado.` : `✅ Marcado como pago em ${monthLabel(ym)}.`);
+    } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+async function unpayCommit(kind, id) {
+  const ym = budYM || todayISO().slice(0, 7);
+  const ref = kind === "divida" ? doc(db, "households", hid, "debts", id) : doc(db, "households", hid, "bills", id);
+  try {
+    await updateDoc(ref, { paidMonths: arrayRemove(ym) });
+    toast(`Baixa desfeita. Se você havia lançado a saída, ela continua nas Transações.`, 4000);
   } catch (e) { toast("Erro: " + e.message); }
 }
 
@@ -2035,19 +2091,22 @@ function monthCommitments(ym) {
   for (const b of pendingBills()) {
     if (!b.dueDate) continue;
     const bym = monthKey(b.dueDate);
+    const paid = (b.paidMonths || []).includes(ym);
     if (b.recurring) {
       const ahead = (Y - +bym.split("-")[0]) * 12 + (M - +bym.split("-")[1]);
       if (ahead < 0) continue;
       if (b.totalTimes && (b.paidTimes || 0) + ahead >= b.totalTimes) continue; // recorrência acabou
-      bills.push({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, id: b.id, day: Math.min(+b.dueDate.split("-")[2], lastDay), recurring: true });
+      bills.push({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, id: b.id, day: Math.min(+b.dueDate.split("-")[2], lastDay), recurring: true, paid });
     } else if (bym === ym) {
-      bills.push({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, id: b.id, day: +b.dueDate.split("-")[2] });
+      bills.push({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, id: b.id, day: +b.dueDate.split("-")[2], paid });
     }
   }
   const debts = debtCalItems(ym).map(d => ({ ...d, day: +d.dueDate.split("-")[2] }));
-  const fixasTotal = bills.reduce((a, b) => a + b.amount, 0);
-  const dividasTotal = debts.reduce((a, b) => a + b.amount, 0);
-  return { bills, debts, fixasTotal, dividasTotal, total: fixasTotal + dividasTotal };
+  // Itens já pagos (dados no mês) não contam de novo no total
+  const fixasTotal = bills.filter(b => !b.paid).reduce((a, b) => a + b.amount, 0);
+  const dividasTotal = debts.filter(d => !d.paid).reduce((a, b) => a + b.amount, 0);
+  const paidTotal = [...bills, ...debts].filter(x => x.paid).reduce((a, x) => a + x.amount, 0);
+  return { bills, debts, fixasTotal, dividasTotal, paidTotal, total: fixasTotal + dividasTotal };
 }
 
 function viewOrcamento() {
@@ -2087,10 +2146,10 @@ function viewOrcamento() {
       <div class="bk-foot"><span class="ico">${icon("wallet")}</span> em ${monthLabel(mk)}</div></div>
     <div class="bkpi"><div class="bk-label">Contas fixas</div>
       <div class="bk-val">${fmtBRL(fixas)}</div>
-      <div class="bk-foot"><span class="ico">${icon("calendar")}</span> ${mc.bills.length} conta(s) em ${monthLabel(mk)}</div></div>
+      <div class="bk-foot"><span class="ico">${icon("calendar")}</span> ${mc.bills.filter(b => !b.paid).length} a pagar${mc.bills.some(b => b.paid) ? " · " + mc.bills.filter(b => b.paid).length + " pago(s)" : ""}</div></div>
     <div class="bkpi"><div class="bk-label">Dívidas no mês</div>
       <div class="bk-val" style="color:${dividas > 0 ? "var(--critical)" : "var(--ink-1)"}">${fmtBRL(dividas)}</div>
-      <div class="bk-foot"><span class="ico">${icon("trend-down")}</span> ${mc.debts.length} parcela(s) negociada(s)</div></div>
+      <div class="bk-foot"><span class="ico">${icon("trend-down")}</span> ${mc.debts.filter(d => !d.paid).length} parcela(s) a pagar</div></div>
     <div class="bkpi"><div class="bk-label">Sobra p/ variáveis + metas</div>
       <div class="bk-val" style="color:${sobra >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(sobra)}</div>
       <div class="bk-foot"><span class="ico">${icon("target")}</span> renda − fixas − dívidas</div></div>
@@ -2156,19 +2215,21 @@ function viewOrcamento() {
   <div class="panel" style="margin-top:16px">
     <div class="panel-head"><h3>Compromissos de ${monthLabel(mk)}</h3>
       <button class="btn secondary small" id="btnAddFixed"><span class="ico" data-ic="plus" style="width:14px;height:14px"></span> Nova conta fixa</button></div>
-    <div class="chart-sub" style="margin-top:-6px; margin-bottom:12px">Contas fixas + dívidas negociadas que vencem neste mês. Total: <b>${fmtBRL(compromissos)}</b> (${renda > 0 ? (compromissos / renda * 100).toFixed(0) : 0}% da renda)</div>
+    <div class="chart-sub" style="margin-top:-6px; margin-bottom:12px">Contas fixas + dívidas negociadas que vencem neste mês. Marque <b>✓ Pago</b> quando quitar — some do total e não conta de novo. Falta pagar: <b>${fmtBRL(compromissos)}</b> (${renda > 0 ? (compromissos / renda * 100).toFixed(0) : 0}% da renda)${mc.paidTotal > 0 ? ` · já pago: <b style="color:var(--good-text)">${fmtBRL(mc.paidTotal)}</b>` : ""}</div>
     ${(mc.bills.length + mc.debts.length) ? `<div class="table-wrap"><table class="inv-table">
       <thead><tr><th>Compromisso</th><th>Tipo</th><th class="num">Valor</th><th>Dia</th><th></th></tr></thead>
-      <tbody>${[...mc.bills.map(b => ({ ...b, kind: "fixa" })), ...mc.debts.map(d => ({ ...d, kind: "divida" }))].sort((a, b) => a.day - b.day).map(x => `<tr>
-        <td><div class="inv-asset"><span class="ia-ic">${icon(x.kind === "divida" ? "trend-down" : catIcon(x.category))}</span><b>${esc(x.name)}</b>${x.dda ? ' <span class="chip">DDA</span>' : ""}</div></td>
-        <td>${x.kind === "divida" ? '<span class="status-pill crit">dívida</span>' : `<span class="chip">${esc(x.category)}</span>`}</td>
+      <tbody>${[...mc.bills.map(b => ({ ...b, kind: "fixa" })), ...mc.debts.map(d => ({ ...d, kind: "divida" }))].sort((a, b) => (a.paid - b.paid) || a.day - b.day).map(x => `<tr style="${x.paid ? "opacity:.55" : ""}">
+        <td><div class="inv-asset"><span class="ia-ic">${icon(x.kind === "divida" ? "trend-down" : catIcon(x.category))}</span><b style="${x.paid ? "text-decoration:line-through" : ""}">${esc(x.name)}</b>${x.dda ? ' <span class="chip">DDA</span>' : ""}</div></td>
+        <td>${x.paid ? '<span class="status-pill good">✓ pago</span>' : x.kind === "divida" ? '<span class="status-pill crit">dívida</span>' : `<span class="chip">${esc(x.category)}</span>`}</td>
         <td class="num">${fmtBRL(x.amount)}</td>
         <td style="white-space:nowrap; color:var(--ink-2)">${String(x.day).padStart(2,"0")}/${mk.split("-")[1]}</td>
-        <td style="white-space:nowrap">${x.kind === "fixa" ? `<button class="icon-btn" title="Editar" data-edit-bill="${x.id}">✏️</button><button class="icon-btn" title="Excluir" data-del-bill="${x.id}">🗑️</button>` : `<button class="icon-btn" title="Ver dívida" data-goto="dividas">→</button>`}</td>
+        <td style="white-space:nowrap; text-align:right">${x.paid
+          ? `<button class="icon-btn" title="Desfazer baixa" data-unpay-commit="${x.kind}:${x.id || x.debtId}">↩︎</button>`
+          : `<button class="btn secondary small" data-pay-commit="${x.kind}:${x.id || x.debtId}" style="padding:4px 10px">✓ Pago</button>${x.kind === "fixa" ? `<button class="icon-btn" title="Editar" data-edit-bill="${x.id}">✏️</button>` : `<button class="icon-btn" title="Ver dívida" data-goto="dividas">→</button>`}`}</td>
       </tr>`).join("")}
-      <tr><td colspan="2"><b>Contas fixas</b></td><td class="num"><b>${fmtBRL(fixas)}</b></td><td colspan="2"></td></tr>
-      <tr><td colspan="2"><b>Dívidas negociadas</b></td><td class="num"><b>${fmtBRL(dividas)}</b></td><td colspan="2"></td></tr>
-      <tr><td colspan="2"><b>Total do mês</b></td><td class="num"><b style="color:var(--accent)">${fmtBRL(compromissos)}</b></td><td colspan="2"></td></tr>
+      <tr><td colspan="2"><b>Contas fixas a pagar</b></td><td class="num"><b>${fmtBRL(fixas)}</b></td><td colspan="2"></td></tr>
+      <tr><td colspan="2"><b>Dívidas negociadas a pagar</b></td><td class="num"><b>${fmtBRL(dividas)}</b></td><td colspan="2"></td></tr>
+      <tr><td colspan="2"><b>Falta pagar no mês</b></td><td class="num"><b style="color:var(--accent)">${fmtBRL(compromissos)}</b></td><td colspan="2"></td></tr>
       </tbody></table></div>`
     : `<div class="empty"><span class="big">📄</span>Nenhum compromisso em ${monthLabel(mk)}. Cadastre contas fixas ou dívidas com vencimento.</div>`}
   </div>
@@ -3351,6 +3412,8 @@ function attachHandlers() {
   const budM = $("#budMonth");
   if (budM) budM.onchange = () => { budYM = budM.value; render(); };
   ["btnSetBudgets", "btnSetBudgets2", "btnSetBudgets3"].forEach(id => $("#" + id) && ($("#" + id).onclick = modalBudgets));
+  document.querySelectorAll("[data-pay-commit]").forEach(b => b.onclick = () => { const [k, id] = b.dataset.payCommit.split(":"); modalCommitPay(k, id); });
+  document.querySelectorAll("[data-unpay-commit]").forEach(b => b.onclick = () => { const [k, id] = b.dataset.unpayCommit.split(":"); unpayCommit(k, id); });
   ["btnBudgetAI", "btnBudgetAI2"].forEach(id => $("#" + id) && ($("#" + id).onclick = budgetSuggestAI));
 
   // plano / patrimônio
