@@ -1031,10 +1031,70 @@ function viewComprovante() {
     <div id="receiptStatus" class="section-gap hidden"></div>
     <div id="receiptResult" class="section-gap hidden"></div>
   </div>
+
+  ${(() => {
+    const lidos = TX.filter(t => t.aiRead && t.type === "saida").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 20);
+    if (!lidos.length) return "";
+    const linkName = lc => { if (!lc) return ""; const [k, id] = lc.split(":"); const it = k === "divida" ? DEBTS.find(d => d.id === id) : BILLS.find(b => b.id === id); return it ? it.name : "compromisso"; };
+    return `<div class="card section-gap">
+      <div class="flex spread" style="flex-wrap:wrap; gap:8px"><h3>🧾 Comprovantes lidos</h3>
+        <span class="muted" style="font-size:12.5px">Vincule a uma conta do orçamento quando quiser</span></div>
+      <div class="table-wrap section-gap"><table class="inv-table">
+        <thead><tr><th>Comprovante</th><th>Data</th><th class="num">Valor</th><th></th></tr></thead>
+        <tbody>${lidos.map(t => `<tr>
+          <td><div class="inv-asset"><span class="ia-ic">${icon(catIcon(t.category))}</span><div><b>${esc(t.desc || "Comprovante")}</b><div class="muted" style="font-size:12px">${esc(t.category)}</div></div></div></td>
+          <td style="white-space:nowrap; color:var(--ink-2)">${t.date.split("-").reverse().slice(0,2).join("/")}</td>
+          <td class="num">${fmtBRL(t.amount)}</td>
+          <td style="text-align:right; white-space:nowrap">${t.linkedCommit
+            ? `<span class="status-pill good" title="Vinculado a ${esc(linkName(t.linkedCommit))}">✓ vinculado</span>`
+            : `<button class="btn secondary small" data-link-receipt="${t.id}" style="padding:4px 10px">🔗 Vincular</button>`}</td>
+        </tr>`).join("")}</tbody></table></div>
+    </div>`;
+  })()}
+
   <div class="card section-gap">
     <h3>Como funciona</h3>
-    <p class="muted" style="margin-top:6px">A imagem é enviada diretamente do seu navegador para a IA Claude, que extrai valor, data, estabelecimento e sugere a categoria. Você confirma antes de salvar — nada é registrado sem sua aprovação. A imagem não fica armazenada.</p>
+    <p class="muted" style="margin-top:6px">A imagem é enviada diretamente do seu navegador para a IA Claude, que extrai valor, data, estabelecimento e sugere a categoria. Você confirma antes de salvar — nada é registrado sem sua aprovação. A imagem não fica armazenada — o que fica salvo aqui é o lançamento lido, que você pode vincular a uma conta do orçamento a qualquer momento.</p>
   </div>`;
+}
+
+// Vincular um comprovante JÁ lançado a um compromisso do orçamento (dá baixa + atualiza valor; não cria nova saída)
+function modalLinkReceipt(txId) {
+  const tx = TX.find(t => t.id === txId);
+  if (!tx) return toast("Lançamento não encontrado.");
+  const ym = monthKey(tx.date);
+  const mc = monthCommitments(ym);
+  const opts = [
+    ...mc.bills.filter(b => !b.paid).map(b => ({ v: `fixa:${b.id}`, t: `${b.name} · estimado ${fmtBRL0(b.amount)}` })),
+    ...mc.debts.filter(d => !d.paid).map(d => ({ v: `divida:${d.debtId}`, t: `${d.name} · parcela ${fmtBRL0(d.amount)}` }))
+  ];
+  if (!opts.length) return toast(`Nenhum compromisso em aberto em ${monthLabel(ym)} para vincular.`, 4000);
+  openModal(`
+    <h3>Vincular comprovante</h3>
+    <p class="muted" style="margin:-4px 0 12px; font-size:13px"><b>${esc(tx.desc || "Comprovante")}</b> · ${fmtBRL(tx.amount)} · ${tx.date.split("-").reverse().join("/")}</p>
+    <div class="field"><label>Compromisso de ${monthLabel(ym)}</label>
+      <select id="lkSel">${opts.map(o => `<option value="${esc(o.v)}">${esc(o.t)}</option>`).join("")}</select></div>
+    <label class="flex" style="gap:9px; cursor:pointer; padding:10px 12px; border:1px solid var(--border); border-radius:10px; align-items:flex-start">
+      <input type="checkbox" id="lkVal" checked style="width:17px;height:17px;margin-top:1px">
+      <span style="font-size:13px">Atualizar o valor projetado para ${fmtBRL(tx.amount)}<br><span class="muted" style="font-size:12px">Deixa o orçamento com o valor real que você pagou.</span></span>
+    </label>
+    <div class="ai-box" style="font-size:12.5px; margin-top:10px">Isso dá baixa no compromisso deste mês. A saída já existe (este comprovante) — não será duplicada.</div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Vincular</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const [kind, id] = $("#lkSel").value.split(":");
+    const isDebt = kind === "divida", updateVal = $("#lkVal").checked;
+    try {
+      const ref = isDebt ? doc(db, "households", hid, "debts", id) : doc(db, "households", hid, "bills", id);
+      const patch = { paidMonths: arrayUnion(ym) };
+      if (updateVal) patch[isDebt ? "monthlyPayment" : "amount"] = tx.amount;
+      if (isDebt) { const d = DEBTS.find(x => x.id === id); if (d) { const paid = (d.paid || 0) + tx.amount, rest = (d.currentValue ?? d.total) - paid; patch.paid = paid; if (rest <= 0.01) patch.status = "quitada"; } }
+      await updateDoc(ref, patch);
+      if (!isDebt) { const b = BILLS.find(x => x.id === id); if (b && b.debtId) { const d = DEBTS.find(x => x.id === b.debtId); if (d) { const paid = (d.paid || 0) + tx.amount, rest = (d.currentValue ?? d.total) - paid; await updateDoc(doc(db, "households", hid, "debts", d.id), { paid, status: rest <= 0.01 ? "quitada" : d.status }); } } }
+      await updateDoc(doc(db, "households", hid, "transactions", tx.id), { linkedCommit: `${kind}:${id}` });
+      closeModal(); toast("🔗 Comprovante vinculado e baixa dada.");
+    } catch (e) { toast("Erro: " + e.message); }
+  };
 }
 
 // ============================================================
@@ -3391,6 +3451,7 @@ function attachHandlers() {
     dz.ondragleave = () => dz.classList.remove("drag");
     dz.ondrop = e => { e.preventDefault(); dz.classList.remove("drag"); e.dataTransfer.files[0] && readReceipt(e.dataTransfer.files[0]); };
   }
+  document.querySelectorAll("[data-link-receipt]").forEach(b => b.onclick = () => modalLinkReceipt(b.dataset.linkReceipt));
 
   // dívidas
   $("#btnAddDebt") && ($("#btnAddDebt").onclick = () => modalDebt());
