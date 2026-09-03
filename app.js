@@ -3043,22 +3043,67 @@ Se a imagem não for um comprovante, responda {"erro": "descreva o problema"}. D
     status.classList.add("hidden");
     const res = $("#receiptResult");
     res.classList.remove("hidden");
+    // compromissos em aberto do mês do comprovante (para vincular)
+    const ym = monthKey(receiptDraft.date);
+    const mc = monthCommitments(ym);
+    const opts = [
+      ...mc.bills.filter(b => !b.paid).map(b => ({ v: `fixa:${b.id}`, t: `${b.name} · estimado ${fmtBRL0(b.amount)}` })),
+      ...mc.debts.filter(d => !d.paid).map(d => ({ v: `divida:${d.debtId}`, t: `${d.name} · parcela ${fmtBRL0(d.amount)}` }))
+    ];
+    const canLink = receiptDraft.type === "saida" && opts.length;
     res.innerHTML = `
       <div class="ai-box">
         <b>✅ Comprovante lido${json.confianca !== "alta" ? " (confira os dados!)" : ""}</b><br>
         ${receiptDraft.type === "entrada" ? "↑ Entrada" : "↓ Saída"} de <b>${fmtBRL(receiptDraft.amount)}</b><br>
         ${esc(receiptDraft.desc)} · ${esc(receiptDraft.category)} · ${esc(receiptDraft.method)} · ${receiptDraft.date.split("-").reverse().join("/")}
       </div>
+      ${canLink ? `
+      <div class="field" style="margin-top:12px">
+        <label>Vincular a um compromisso de ${monthLabel(ym)}? (opcional)</label>
+        <select id="rcpLink">
+          <option value="">Não vincular — só registrar a transação</option>
+          ${opts.map(o => `<option value="${esc(o.v)}">${esc(o.t)}</option>`).join("")}
+        </select>
+        <span class="hint">Ao vincular: dá baixa no compromisso do mês (sem duplicar) e <b>atualiza o valor projetado para o real</b> (${fmtBRL(receiptDraft.amount)}) no orçamento e em tudo vinculado.</span>
+      </div>
+      <label class="flex hidden" id="rcpRegWrap" style="gap:9px; margin-top:8px; cursor:pointer; align-items:flex-start">
+        <input type="checkbox" id="rcpReg" checked style="width:17px;height:17px;margin-top:1px">
+        <span style="font-size:13px">Registrar a saída de ${fmtBRL(receiptDraft.amount)} agora<br><span class="muted" style="font-size:12px">Desmarque se essa despesa <b>já foi lançada</b> (ex.: fatura do cartão já detalhada nos Cartões) — aí só dá baixa.</span></span>
+      </label>` : ""}
       <div class="flex section-gap">
         <button class="btn" id="btnConfirmReceipt">✅ Confirmar e salvar</button>
         <button class="btn secondary" id="btnEditReceipt">✏️ Ajustar antes</button>
       </div>`;
+    const linkSel = $("#rcpLink");
+    if (linkSel) linkSel.onchange = () => { const w = $("#rcpRegWrap"); if (w) w.classList.toggle("hidden", !linkSel.value); };
     $("#btnConfirmReceipt").onclick = async () => {
+      const link = linkSel ? linkSel.value : "";
+      const register = link ? ($("#rcpReg")?.checked ?? true) : true;
       try {
-        await addDoc(collection(db, "households", hid, "transactions"), {
-          ...receiptDraft, createdBy: user.email, createdAt: new Date().toISOString()
-        });
-        toast("🤖 Transação registrada pela IA!");
+        if (register) {
+          await addDoc(collection(db, "households", hid, "transactions"), {
+            ...receiptDraft, ...(link ? { linkedCommit: link } : {}), createdBy: user.email, createdAt: new Date().toISOString()
+          });
+        }
+        if (link) {
+          const [kind, id] = link.split(":");
+          const isDebt = kind === "divida";
+          const ref = isDebt ? doc(db, "households", hid, "debts", id) : doc(db, "households", hid, "bills", id);
+          // baixa no mês + atualiza o valor projetado do compromisso para o valor REAL do comprovante
+          const patch = isDebt ? { paidMonths: arrayUnion(ym), monthlyPayment: receiptDraft.amount } : { paidMonths: arrayUnion(ym), amount: receiptDraft.amount };
+          if (isDebt && register) {
+            const d = DEBTS.find(x => x.id === id);
+            if (d) { const paid = (d.paid || 0) + receiptDraft.amount, rest = (d.currentValue ?? d.total) - paid; patch.paid = paid; if (rest <= 0.01) patch.status = "quitada"; }
+          }
+          await updateDoc(ref, patch);
+          if (!isDebt && register) {
+            const b = BILLS.find(x => x.id === id);
+            if (b && b.debtId) { const d = DEBTS.find(x => x.id === b.debtId); if (d) { const paid = (d.paid || 0) + receiptDraft.amount, rest = (d.currentValue ?? d.total) - paid; await updateDoc(doc(db, "households", hid, "debts", d.id), { paid, status: rest <= 0.01 ? "quitada" : d.status }); } }
+          }
+          toast(register ? `🤖 Lançado, vinculado e valor atualizado para ${fmtBRL(receiptDraft.amount)}.` : `✅ Baixa dada e valor atualizado (sem duplicar).`);
+        } else {
+          toast("🤖 Transação registrada pela IA!");
+        }
         res.classList.add("hidden");
       } catch (e) { toast("Erro: " + e.message); }
     };
