@@ -1347,6 +1347,7 @@ function modalImportFatura(cardId) {
   openModal(`
     <h3>Importar fatura — ${esc(card?.name || "cartão")}</h3>
     <p class="muted" style="margin:-8px 0 12px; font-size:13px">Envie a fatura (PDF, print ou CSV). A IA separa cada compra por categoria. Você confere antes de salvar — nada é lançado sem sua confirmação.</p>
+    ${(() => { const n = TX.filter(t => t.card === cardId && t.imported).length; return n ? `<div class="flex spread" style="margin-bottom:10px; font-size:13px; color:var(--ink-2)"><span>Já há ${n} compra(s) importada(s) neste cartão.</span><button class="link-btn" id="fatClear" style="color:var(--critical)">Remover importadas</button></div>` : ""; })()}
     <div class="dropzone" id="fatDrop">
       <span class="big">🧾</span><b>Arraste a fatura aqui</b><br>ou
       <div class="flex" style="justify-content:center; margin-top:10px"><button class="btn small" id="fatPick">Escolher arquivo</button></div>
@@ -1365,6 +1366,12 @@ function modalImportFatura(cardId) {
     <div id="fatResult"></div>
     <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
   $("#mCancel").onclick = closeModal;
+  $("#fatClear") && ($("#fatClear").onclick = async () => {
+    const imp = TX.filter(t => t.card === cardId && t.imported);
+    if (!imp.length || !confirm(`Remover ${imp.length} compra(s) importada(s) deste cartão? (as lançadas manualmente não são afetadas)`)) return;
+    try { for (const t of imp) await deleteDoc(doc(db, "households", hid, "transactions", t.id)); toast(`🗑️ ${imp.length} compra(s) importada(s) removida(s).`); closeModal(); }
+    catch (e) { toast("Erro: " + e.message); }
+  });
   $("#fatPick").onclick = () => $("#fatFile").click();
   $("#fatFile").onchange = e => e.target.files[0] && importFatura(e.target.files[0], cardId);
   $("#fatPwGo").onclick = () => { const p = $("#fatPw").value; if (faturaFile) importFatura(faturaFile, cardId, p); };
@@ -1411,8 +1418,21 @@ async function importFatura(file, cardId, password) {
     faturaDraft = (json.itens || []).filter(i => +i.valor > 0);
     if (!faturaDraft.length) throw new Error("Nenhuma compra encontrada na fatura.");
     const tot = faturaDraft.reduce((a, i) => a + +i.valor, 0);
+    const card = CARDS.find(c => c.id === cardId);
+    const curYm = todayISO().slice(0, 7);
+    const payDefault = card?.dueDay ? `${curYm}-${String(Math.min(+card.dueDay, 28)).padStart(2, "0")}` : todayISO();
     status.innerHTML = `<div class="ai-box">✅ ${faturaDraft.length} compra(s) · total ${fmtBRL(tot)} — confira as categorias e importe.</div>`;
     $("#fatResult").innerHTML = `
+      <div class="ai-box" style="margin-top:10px; font-size:13px; display:flex; flex-direction:column; gap:8px">
+        <label class="flex" style="gap:8px; cursor:pointer; align-items:flex-start">
+          <input type="checkbox" id="fatUsePay" checked style="width:16px;height:16px; margin-top:2px">
+          <span>Lançar tudo pela <b>data de pagamento da fatura</b> — o dinheiro sai nesse mês (recomendado). Desmarque para manter a data de cada compra.</span>
+        </label>
+        <div class="flex" id="fatPayWrap" style="gap:8px; align-items:center">
+          <span>Data de pagamento:</span>
+          <input type="date" id="fatPayDate" value="${payDefault}" style="padding:6px 9px; border-radius:8px; border:1px solid var(--border); background:var(--page)">
+        </div>
+      </div>
       <div style="max-height:40vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-top:10px">
         ${faturaDraft.map((i, idx) => `<div class="flex" style="gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--border); border-radius:9px">
           <input type="checkbox" class="fat-chk" data-i="${idx}" checked style="width:16px;height:16px">
@@ -1424,19 +1444,22 @@ async function importFatura(file, cardId, password) {
         </div>`).join("")}
       </div>
       <button class="btn" id="fatConfirm" style="width:100%; justify-content:center; margin-top:12px">✅ Importar compras selecionadas</button>`;
+    const upd = $("#fatUsePay");
+    if (upd) upd.onchange = () => { const w = $("#fatPayWrap"), d = $("#fatPayDate"); if (w) w.style.opacity = upd.checked ? "1" : ".4"; if (d) d.disabled = !upd.checked; };
     $("#fatConfirm").onclick = async () => {
       const chosen = [...document.querySelectorAll(".fat-chk:checked")].map(c => +c.dataset.i);
       if (!chosen.length) return toast("Marque ao menos uma compra.");
+      const usePay = $("#fatUsePay")?.checked, payDate = $("#fatPayDate")?.value;
       $("#fatConfirm").disabled = true; $("#fatConfirm").textContent = "Importando…";
       try {
         for (const idx of chosen) {
           const i = faturaDraft[idx];
           const cat = document.querySelector(`.fat-cat[data-i="${idx}"]`)?.value || i.categoria || "Outros";
           await addDoc(collection(db, "households", hid, "transactions"), {
-            type: "saida", amount: +i.valor, date: i.data || todayISO(),
+            type: "saida", amount: +i.valor, date: (usePay && payDate) ? payDate : (i.data || todayISO()),
             desc: (i.desc || "Compra") + (i.parcela ? " (" + i.parcela + ")" : ""),
             category: catsOut().includes(cat) ? cat : "Outros", method: "Cartão de crédito",
-            card: cardId, createdBy: user.email, createdAt: new Date().toISOString(), imported: true
+            card: cardId, purchaseDate: i.data || null, createdBy: user.email, createdAt: new Date().toISOString(), imported: true
           });
         }
         closeModal(); toast(`💳 ${chosen.length} compra(s) importada(s) da fatura!`);
