@@ -1248,6 +1248,19 @@ function viewCartoes() {
 
   <div class="ai-box" style="margin-bottom:16px; font-size:13px">💡 A fatura não é um gasto novo — cada <b>compra</b> já conta no seu orçamento por categoria. Aqui você importa a fatura, a IA separa cada compra (transporte, vestuário, assinatura…) e você vê exatamente onde o dinheiro do cartão foi.</div>
 
+  ${(() => {
+    const orfas = TX.filter(t => t.card && !CARDS.some(c => c.id === t.card));
+    if (!orfas.length) return "";
+    const tot = orfas.reduce((a, t) => a + (t.amount || 0), 0);
+    return `<div class="panel section-gap" style="border:1px solid var(--critical); margin-bottom:16px">
+      <div class="flex spread" style="flex-wrap:wrap; gap:10px; align-items:center">
+        <div><h3 style="color:var(--critical); margin:0">Compras de cartão(ões) removido(s)</h3>
+          <div class="chart-sub" style="margin-top:3px">${orfas.length} compra(s) · ${fmtBRL(tot)} continuam lançadas de um cartão que não existe mais.</div></div>
+        <button class="btn danger" id="btnClearOrphan">🗑️ Remover essas compras</button>
+      </div>
+    </div>`;
+  })()}
+
   ${!CARDS.length ? `<div class="panel"><div class="empty"><span class="big">💳</span>
     Você ainda não cadastrou nenhum cartão.<br>Clique em <b>Novo cartão</b> para começar — depois é só <b>importar a fatura</b>.</div></div>`
     : CARDS.map(c => {
@@ -3502,6 +3515,12 @@ function attachHandlers() {
   const cardM = $("#cardMonth");
   if (cardM) cardM.onchange = () => { cardYM = cardM.value; render(); };
   $("#btnAddCard") && ($("#btnAddCard").onclick = () => modalCard());
+  $("#btnClearOrphan") && ($("#btnClearOrphan").onclick = async () => {
+    const orfas = TX.filter(t => t.card && !CARDS.some(c => c.id === t.card));
+    if (!orfas.length || !confirm(`Remover ${orfas.length} compra(s) de cartão(ões) que não existem mais? Isso apaga esses lançamentos das transações.`)) return;
+    try { for (const t of orfas) await deleteDoc(doc(db, "households", hid, "transactions", t.id)); toast(`🗑️ ${orfas.length} compra(s) removida(s).`); }
+    catch (e) { toast("Erro: " + e.message); }
+  });
   document.querySelectorAll("[data-imp-fatura]").forEach(b => b.onclick = () => modalImportFatura(b.dataset.impFatura));
   document.querySelectorAll("[data-add-compra]").forEach(b => b.onclick = () => modalCardPurchase(b.dataset.addCompra));
   document.querySelectorAll("[data-edit-card]").forEach(b => b.onclick = () => modalCard(CARDS.find(c => c.id === b.dataset.editCard)));
