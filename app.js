@@ -1706,7 +1706,11 @@ function viewCalendario() {
   const mc = monthCommitments(ym);
   const items = [
     ...mc.bills.filter(b => !b.paid).map(b => ({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, isDebt: false, id: b.id, day: b.day })),
-    ...mc.debts.filter(d => !d.paid).map(d => ({ name: d.name, amount: d.amount, category: d.category, isDebt: true, debtId: d.debtId, day: d.day }))
+    ...mc.debts.filter(d => !d.paid).map(d => ({ name: d.name, amount: d.amount, category: d.category, isDebt: true, debtId: d.debtId, day: d.day })),
+    // faturas de cartão: total das compras do mês, no dia de vencimento do cartão
+    ...CARDS.map(c => ({ c, total: cardTxs(c.id, ym).reduce((a, t) => a + t.amount, 0) }))
+      .filter(x => x.total > 0 && x.c.dueDay)
+      .map(x => ({ name: "Fatura " + x.c.name, amount: x.total, category: "Cartão de Crédito", isCard: true, cardId: x.c.id, day: Math.min(+x.c.dueDay, daysInMonth) }))
   ].map(x => ({ ...x, dueDate: `${ym}-${String(Math.min(x.day, daysInMonth)).padStart(2, "0")}` }));
   const byDay = {};
   for (const b of items) { const d = +b.dueDate.split("-")[2]; (byDay[d] = byDay[d] || []).push(b); }
@@ -1799,7 +1803,10 @@ function modalDayBills(iso) {
   const mc = monthCommitments(ym);
   const list = [
     ...mc.bills.filter(b => !b.paid && Math.min(b.day, new Date(+ym.split("-")[0], +ym.split("-")[1], 0).getDate()) === day).map(b => ({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, isDebt: false, id: b.id })),
-    ...mc.debts.filter(d => !d.paid && d.day === day).map(d => ({ name: d.name, amount: d.amount, category: d.category, isDebt: true, debtId: d.debtId }))
+    ...mc.debts.filter(d => !d.paid && d.day === day).map(d => ({ name: d.name, amount: d.amount, category: d.category, isDebt: true, debtId: d.debtId })),
+    ...CARDS.map(c => ({ c, total: cardTxs(c.id, ym).reduce((a, t) => a + t.amount, 0) }))
+      .filter(x => x.total > 0 && x.c.dueDay && Math.min(+x.c.dueDay, new Date(+ym.split("-")[0], +ym.split("-")[1], 0).getDate()) === day)
+      .map(x => ({ name: "Fatura " + x.c.name, amount: x.total, category: "Cartão de Crédito", isCard: true, cardId: x.c.id }))
   ].sort((a, b) => b.amount - a.amount);
   const tot = list.reduce((a, b) => a + b.amount, 0);
   const d = new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
@@ -1808,14 +1815,15 @@ function modalDayBills(iso) {
     <p class="muted" style="margin:-8px 0 14px">${list.length} conta(s) · total ${fmtBRL(tot)}</p>
     <div style="display:flex; flex-direction:column; gap:8px">
       ${list.map((b, i) => `<div class="flex spread" style="padding:11px 12px; border:1px solid var(--border); border-radius:10px; gap:10px">
-        <div class="inv-asset"><span class="ia-ic">${icon(b.isDebt ? "trend-down" : catIcon(b.category))}</span>
-          <div><b>${esc(b.name)}</b>${b.isDebt ? ' <span class="chip">dívida</span>' : b.dda ? ' <span class="chip">DDA</span>' : ""}<div class="muted" style="font-size:12px">${esc(b.category)}</div></div></div>
+        <div class="inv-asset"><span class="ia-ic">${icon(b.isCard ? "card" : b.isDebt ? "trend-down" : catIcon(b.category))}</span>
+          <div><b>${esc(b.name)}</b>${b.isCard ? ' <span class="chip">fatura</span>' : b.isDebt ? ' <span class="chip">dívida</span>' : b.dda ? ' <span class="chip">DDA</span>' : ""}<div class="muted" style="font-size:12px">${esc(b.category)}</div></div></div>
         <div style="text-align:right"><b>${fmtBRL(b.amount)}</b>
-          <div><button class="btn small" data-day-pay="${i}" style="margin-top:4px">💵 Pagar</button></div></div>
+          <div>${b.isCard ? `<button class="btn small secondary" data-goto="cartoes" style="margin-top:4px">Ver cartão</button>` : `<button class="btn small" data-day-pay="${i}" style="margin-top:4px">💵 Pagar</button>`}</div></div>
       </div>`).join("")}
     </div>
     <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
   $("#mCancel").onclick = closeModal;
+  $("#modalBox") && $("#modalBox").querySelectorAll("[data-goto]").forEach(b => b.onclick = () => { closeModal(); switchView(b.dataset.goto); });
   list.forEach((b, i) => { const btn = $(`[data-day-pay="${i}"]`); if (btn) btn.onclick = () => { closeModal(); modalCommitPay(b.isDebt ? "divida" : "fixa", b.isDebt ? b.debtId : b.id, ym); }; });
 }
 
