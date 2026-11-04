@@ -1352,9 +1352,21 @@ function modalCardPurchase(cardId) {
   };
 }
 
+// Extrai itens de uma resposta JSON da IA, tolerante a corte por limite de tokens:
+// tenta o parse normal; se falhar (JSON truncado), recupera cada objeto {...} completo.
+function parseItens(raw) {
+  try {
+    const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    if (Array.isArray(j.itens)) return { itens: j.itens, truncado: false, extra: j };
+  } catch {}
+  const out = [];
+  for (const s of (raw.match(/\{[^{}]*\}/g) || [])) { try { out.push(JSON.parse(s)); } catch {} }
+  return { itens: out, truncado: true, extra: {} };
+}
+
 const FATURA_SYS = `Você extrai as compras de uma FATURA de cartão de crédito brasileira. Responda APENAS com JSON válido, sem markdown:
 {"itens":[{"desc":"estabelecimento","valor":123.45,"data":"YYYY-MM-DD","categoria":"uma de: ${CATS_OUT_BASE.join(", ")}","parcela":"3/10 ou vazio"}]}
-Regras: um item por linha de compra; valor sempre número com ponto decimal; data da compra (se só houver dia/mês, use o ano da fatura); categorize pelo estabelecimento (posto→Transporte, mercado→Mercado, restaurante/ifood→Alimentação, roupa→Vestuário, streaming→Assinaturas, farmácia→Saúde etc.). IGNORE: pagamento de fatura anterior, estorno, encargos/juros, IOF, anuidade se preferir Outros. Se não houver compras, {"itens":[]}.`;
+Regras: um item por linha de compra; desc CURTA (máx 28 caracteres, só o nome do estabelecimento); valor sempre número com ponto decimal; data da compra (se só houver dia/mês, use o ano da fatura); categorize pelo estabelecimento (posto→Transporte, mercado→Mercado, restaurante/ifood→Alimentação, roupa→Vestuário, streaming→Assinaturas, farmácia→Saúde etc.). IGNORE: pagamento de fatura anterior, estorno, encargos/juros, IOF, anuidade se preferir Outros. Se não houver compras, {"itens":[]}.`;
 
 function modalImportFatura(cardId) {
   if (!hasAIKey()) return toast("Configure sua chave da API Claude em Configurações para importar a fatura.");
@@ -1428,15 +1440,16 @@ async function importFatura(file, cardId, password) {
     } else {
       blocks = await fileToContentBlock(file);
     }
-    const raw = await callClaude({ maxTokens: 4000, system: FATURA_SYS, messages: [{ role: "user", content: [{ type: "text", text: "Extraia as compras desta fatura." }, ...blocks] }] });
-    const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
-    faturaDraft = (json.itens || []).filter(i => +i.valor > 0);
+    const raw = await callClaude({ maxTokens: 8000, system: FATURA_SYS, messages: [{ role: "user", content: [{ type: "text", text: "Extraia as compras desta fatura." }, ...blocks] }] });
+    const parsed = parseItens(raw);
+    faturaDraft = parsed.itens.filter(i => +i.valor > 0);
     if (!faturaDraft.length) throw new Error("Nenhuma compra encontrada na fatura.");
+    const avisoTrunc = parsed.truncado ? ' <b>A fatura é grande e pode ter sido cortada</b> — confira o total; se faltou compra, importe o restante numa segunda leitura.' : "";
     const tot = faturaDraft.reduce((a, i) => a + +i.valor, 0);
     const card = CARDS.find(c => c.id === cardId);
     const curYm = todayISO().slice(0, 7);
     const payDefault = card?.dueDay ? `${curYm}-${String(Math.min(+card.dueDay, 28)).padStart(2, "0")}` : todayISO();
-    status.innerHTML = `<div class="ai-box">✅ ${faturaDraft.length} compra(s) · total ${fmtBRL(tot)} — confira as categorias e importe.</div>`;
+    status.innerHTML = `<div class="ai-box">✅ ${faturaDraft.length} compra(s) · total ${fmtBRL(tot)} — confira as categorias e importe.${avisoTrunc}</div>`;
     $("#fatResult").innerHTML = `
       <div class="ai-box" style="margin-top:10px; font-size:13px; display:flex; flex-direction:column; gap:8px">
         <label class="flex" style="gap:8px; cursor:pointer; align-items:flex-start">
@@ -1562,14 +1575,14 @@ async function importExtrato(file, password) {
     } else {
       blocks = await fileToContentBlock(file);
     }
-    const raw = await callClaude({ maxTokens: 6000, system: EXTRATO_SYS, messages: [{ role: "user", content: [{ type: "text", text: "Extraia todas as movimentações deste extrato." }, ...blocks] }] });
-    const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
-    extratoDraft = (json.itens || []).filter(i => +i.valor > 0).map(i => ({ ...i, tipo: i.tipo === "entrada" ? "entrada" : "saida" }));
+    const raw = await callClaude({ maxTokens: 8000, system: EXTRATO_SYS, messages: [{ role: "user", content: [{ type: "text", text: "Extraia todas as movimentações deste extrato." }, ...blocks] }] });
+    const parsed = parseItens(raw);
+    extratoDraft = parsed.itens.filter(i => +i.valor > 0).map(i => ({ ...i, tipo: i.tipo === "entrada" ? "entrada" : "saida" }));
     if (!extratoDraft.length) throw new Error("Nenhuma movimentação encontrada no extrato.");
     const nIn = extratoDraft.filter(i => i.tipo === "entrada").length, nOut = extratoDraft.length - nIn;
     const totIn = extratoDraft.filter(i => i.tipo === "entrada").reduce((a, i) => a + +i.valor, 0);
     const totOut = extratoDraft.filter(i => i.tipo === "saida").reduce((a, i) => a + +i.valor, 0);
-    status.innerHTML = `<div class="ai-box">✅ ${extratoDraft.length} movimentação(ões): ${nIn} entrada(s) (${fmtBRL(totIn)}) e ${nOut} saída(s) (${fmtBRL(totOut)}). Revise e aprove o que quer salvar.</div>`;
+    status.innerHTML = `<div class="ai-box">✅ ${extratoDraft.length} movimentação(ões): ${nIn} entrada(s) (${fmtBRL(totIn)}) e ${nOut} saída(s) (${fmtBRL(totOut)}). Revise e aprove o que quer salvar.${parsed.truncado ? ' <b>Extrato grande, pode ter sido cortado</b> — se faltou movimentação, importe o restante numa segunda leitura.' : ""}</div>`;
     $("#extResult").innerHTML = `
       <div class="flex" style="gap:10px; margin:10px 0 8px; font-size:13px">
         <button class="link-btn" id="extAll">Marcar todas</button><span style="color:var(--ink-3)">·</span>
@@ -3482,9 +3495,10 @@ async function importReadFile(files) {
       { type: "text", text: files.length > 1 ? "Cruze a POSIÇÃO com as MOVIMENTAÇÕES: um item por ativo da posição, valor atual e data de aporte casada pelo código/ticker." : "Extraia os investimentos deste extrato." },
       ...blocks
     ];
-    const raw = await callClaude({ maxTokens: 3500, system: IMPORT_SYS, messages: [{ role: "user", content }] });
-    const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
-    importDraft = (json.itens || []).filter(i => +i.amount > 0);
+    const raw = await callClaude({ maxTokens: 8000, system: IMPORT_SYS, messages: [{ role: "user", content }] });
+    const parsed = parseItens(raw);
+    const json = parsed.extra;
+    importDraft = parsed.itens.filter(i => +i.amount > 0);
     if (!importDraft.length) throw new Error("Nenhum investimento encontrado no arquivo. Tente outro export (posição ou movimentações).");
     // data de referência: da posição usar a do arquivo (posicaoYYYYMMDD) ou hoje
     const posName = (files.find(f => (f.name || "").toLowerCase().includes("posic")) || files[0]).name || "";
