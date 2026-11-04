@@ -1701,15 +1701,18 @@ function viewCalendario() {
   const today = todayISO();
   const label = first.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 
-  // contas a pagar por dia do mês = boletos + parcelas de dívidas ativas
+  // contas a pagar por dia do mês = PROJEÇÃO do mês (recorrentes + avulsas + parcelas de dívida),
+  // igual ao Orçamento — assim contas recorrentes aparecem mesmo com a data travada em meses anteriores.
+  const mc = monthCommitments(ym);
   const items = [
-    ...pendingBills().filter(b => b.dueDate && monthKey(b.dueDate) === ym && !(b.paidMonths || []).includes(ym)),
-    ...debtCalItems(ym).filter(x => !x.paid)
-  ];
+    ...mc.bills.filter(b => !b.paid).map(b => ({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, isDebt: false, id: b.id, day: b.day })),
+    ...mc.debts.filter(d => !d.paid).map(d => ({ name: d.name, amount: d.amount, category: d.category, isDebt: true, debtId: d.debtId, day: d.day }))
+  ].map(x => ({ ...x, dueDate: `${ym}-${String(Math.min(x.day, daysInMonth)).padStart(2, "0")}` }));
   const byDay = {};
   for (const b of items) { const d = +b.dueDate.split("-")[2]; (byDay[d] = byDay[d] || []).push(b); }
   const monthTotal = items.reduce((a, b) => a + b.amount, 0);
-  const overdueTotal = items.filter(b => b.dueDate < today).reduce((a, b) => a + b.amount, 0);
+  // Vencido ACUMULADO = todas as parcelas de meses anteriores ainda não pagas (como na aba Boletos)
+  const overdueTotal = pendingBills().reduce((a, b) => a + overdueOccurrences(b).n * b.amount, 0);
 
   const dows = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
   let cells = "";
@@ -1740,7 +1743,7 @@ function viewCalendario() {
     <div class="card tile"><div class="label">Total a pagar em ${monthLabel(ym)}</div><div class="value">${fmtBRL(monthTotal)}</div></div>
     <div class="card tile"><div class="label">Vencido (acumulado)</div>
       <div class="value" style="color:${overdueTotal > 0 ? "var(--critical)" : "var(--good-text)"}">${fmtBRL(overdueTotal)}</div>
-      <div class="delta">${overdueTotal > 0 ? "regularize o quanto antes" : "nada em atraso 🎉"}</div></div>
+      <div class="delta">${overdueTotal > 0 ? "parcelas de meses anteriores — veja em Boletos" : "nada em atraso 🎉"}</div></div>
   </div>
 
   <div class="panel section-gap">
@@ -1792,8 +1795,12 @@ function debtCalItems(ym) {
   return out;
 }
 function modalDayBills(iso) {
-  const list = [...pendingBills().filter(b => b.dueDate === iso && !(b.paidMonths || []).includes(iso.slice(0, 7))), ...debtCalItems(iso.slice(0, 7)).filter(x => x.dueDate === iso && !x.paid)]
-    .sort((a, b) => b.amount - a.amount);
+  const ym = iso.slice(0, 7), day = +iso.split("-")[2];
+  const mc = monthCommitments(ym);
+  const list = [
+    ...mc.bills.filter(b => !b.paid && Math.min(b.day, new Date(+ym.split("-")[0], +ym.split("-")[1], 0).getDate()) === day).map(b => ({ name: b.name, amount: b.amount, category: b.category, dda: b.dda, isDebt: false, id: b.id })),
+    ...mc.debts.filter(d => !d.paid && d.day === day).map(d => ({ name: d.name, amount: d.amount, category: d.category, isDebt: true, debtId: d.debtId }))
+  ].sort((a, b) => b.amount - a.amount);
   const tot = list.reduce((a, b) => a + b.amount, 0);
   const d = new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
   openModal(`
@@ -1809,7 +1816,7 @@ function modalDayBills(iso) {
     </div>
     <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
   $("#mCancel").onclick = closeModal;
-  list.forEach((b, i) => { const btn = $(`[data-day-pay="${i}"]`); if (btn) btn.onclick = () => { closeModal(); b.isDebt ? payDebtPrompt(DEBTS.find(x => x.id === b.debtId)) : payBill(b); }; });
+  list.forEach((b, i) => { const btn = $(`[data-day-pay="${i}"]`); if (btn) btn.onclick = () => { closeModal(); modalCommitPay(b.isDebt ? "divida" : "fixa", b.isDebt ? b.debtId : b.id, ym); }; });
 }
 
 function viewBoletos() {
@@ -1974,8 +1981,8 @@ async function payBill(b) {
 
 // Dar baixa num compromisso (conta fixa ou parcela de dívida) para um mês específico,
 // sem tirá-lo da recorrência. Opcionalmente lança a saída — desmarque se já lançou.
-function modalCommitPay(kind, id) {
-  const ym = budYM || todayISO().slice(0, 7);
+function modalCommitPay(kind, id, ymArg) {
+  const ym = ymArg || budYM || todayISO().slice(0, 7);
   const isDebt = kind === "divida";
   const item = isDebt ? DEBTS.find(d => d.id === id) : BILLS.find(b => b.id === id);
   if (!item) return toast("Item não encontrado.");
