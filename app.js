@@ -22,6 +22,7 @@ let dashPeriod = "mes"; // mes | mesPassado | m3 | m6 | ano
 let calYM = null;       // 'YYYY-MM' do calendário
 let budYM = null;       // 'YYYY-MM' do orçamento (mês planejado)
 let cardYM = null;      // 'YYYY-MM' da aba Cartões
+let cardCatFilter = ""; // filtro de categoria na aba Cartões
 let faturaDraft = [];
 let extratoDraft = [], extratoFile = null;
 let flowRange = "12";   // 6 | 12 | ano  (gráfico de fluxo)
@@ -1292,16 +1293,28 @@ function viewCartoes() {
             <div class="meter"><div style="width:${(v / maxC * 100).toFixed(1)}%; background:var(--s2)"></div></div>
           </div>`).join("")}
         </div>
+        <div class="flex" style="gap:8px; align-items:center; margin-top:14px; flex-wrap:wrap">
+          <span class="muted" style="font-size:12.5px">Filtrar:</span>
+          <select class="card-cat-filter" style="padding:5px 9px; border-radius:8px; border:1px solid var(--border); background:var(--page); font-size:13px">
+            <option value="">Todas as categorias (${txs.length})</option>
+            ${cats.map(([cat, v, n]) => `<option value="${esc(cat)}" ${cardCatFilter === cat ? "selected" : ""}>${esc(cat)} (${txs.filter(t => t.category === cat).length})</option>`).join("")}
+          </select>
+          ${cardCatFilter ? `<button class="link-btn" id="cardCatClear" style="font-size:12.5px">limpar filtro</button>` : ""}
+          <span class="muted" style="font-size:12px">· mude a categoria direto na lista</span>
+        </div>
         <div class="table-wrap section-gap"><table class="inv-table">
           <thead><tr><th>Compra</th><th>Categoria</th><th>Data</th><th class="num">Valor</th><th></th></tr></thead>
-          <tbody>${txs.slice(0, 10).map(t => `<tr>
+          <tbody>${(() => {
+            const shown = cardCatFilter ? txs.filter(t => t.category === cardCatFilter) : txs;
+            const lim = cardCatFilter ? 200 : 10;
+            return shown.slice(0, lim).map(t => `<tr>
             <td><b>${esc(t.desc || "—")}</b></td>
-            <td><span class="chip">${esc(t.category)}</span></td>
+            <td><select class="cardcat-sel" data-tx="${t.id}" style="padding:4px 7px; border-radius:7px; border:1px solid var(--border); background:var(--page); font-size:12px; max-width:140px">${catsOut().map(c => `<option ${c === t.category ? "selected" : ""}>${c}</option>`).join("")}</select></td>
             <td style="white-space:nowrap; color:var(--ink-2)">${t.date.split("-").reverse().slice(0,2).join("/")}</td>
             <td class="num">${fmtBRL(t.amount)}</td>
             <td><button class="icon-btn" data-edit-tx="${t.id}">✏️</button><button class="icon-btn" data-del-tx="${t.id}">🗑️</button></td>
-          </tr>`).join("")}</tbody></table></div>
-        ${txs.length > 10 ? `<div class="muted section-gap" style="text-align:center; font-size:13px">Mostrando 10 de ${txs.length} compras</div>` : ""}`
+          </tr>`).join("") + (shown.length > lim ? `<tr><td colspan="5" class="muted" style="text-align:center; font-size:13px">Mostrando ${lim} de ${shown.length}${cardCatFilter ? "" : " — filtre por categoria para ver mais"}</td></tr>` : "");
+          })()}</tbody></table></div>`
         : `<div class="empty" style="padding:24px 10px"><span class="big">🧾</span>Nenhuma compra em ${monthLabel(ym)}. Clique em <b>Importar fatura</b> ou <b>+ Compra</b>.</div>`}
       </div>`;
     }).join("")}`;
@@ -3719,6 +3732,12 @@ function attachHandlers() {
   document.querySelectorAll("[data-imp-fatura]").forEach(b => b.onclick = () => modalImportFatura(b.dataset.impFatura));
   document.querySelectorAll("[data-add-compra]").forEach(b => b.onclick = () => modalCardPurchase(b.dataset.addCompra));
   document.querySelectorAll("[data-card-dates]").forEach(b => b.onclick = () => modalCardPayDate(b.dataset.cardDates));
+  document.querySelectorAll(".card-cat-filter").forEach(s => s.onchange = () => { cardCatFilter = s.value; render(); });
+  $("#cardCatClear") && ($("#cardCatClear").onclick = () => { cardCatFilter = ""; render(); });
+  document.querySelectorAll(".cardcat-sel").forEach(s => s.onchange = async () => {
+    try { await updateDoc(doc(db, "households", hid, "transactions", s.dataset.tx), { category: s.value }); toast("Categoria atualizada."); }
+    catch (e) { toast("Erro: " + e.message); }
+  });
   document.querySelectorAll("[data-edit-card]").forEach(b => b.onclick = () => modalCard(CARDS.find(c => c.id === b.dataset.editCard)));
   document.querySelectorAll("[data-del-card]").forEach(b => b.onclick = async () => {
     const c = CARDS.find(x => x.id === b.dataset.delCard);
