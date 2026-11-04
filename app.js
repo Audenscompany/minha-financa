@@ -1402,8 +1402,8 @@ function parseItens(raw) {
 }
 
 const FATURA_SYS = `Você extrai as compras de uma FATURA de cartão de crédito brasileira. Responda APENAS com JSON válido, sem markdown:
-{"itens":[{"desc":"estabelecimento","valor":123.45,"data":"YYYY-MM-DD","categoria":"uma de: ${CATS_OUT_BASE.join(", ")}","parcela":"3/10 ou vazio"}]}
-Regras: um item por linha de compra; desc CURTA (máx 28 caracteres, só o nome do estabelecimento); valor sempre número com ponto decimal; data da compra (se só houver dia/mês, use o ano da fatura); categorize pelo estabelecimento (posto→Transporte, mercado→Mercado, restaurante/ifood→Alimentação, roupa→Vestuário, streaming→Assinaturas, farmácia→Saúde etc.). IGNORE: pagamento de fatura anterior, estorno, encargos/juros, IOF, anuidade se preferir Outros. Se não houver compras, {"itens":[]}.`;
+{"vencimento":"YYYY-MM-DD","itens":[{"desc":"estabelecimento","valor":123.45,"data":"YYYY-MM-DD","categoria":"uma de: ${CATS_OUT_BASE.join(", ")}","parcela":"3/10 ou vazio"}]}
+Regras: "vencimento" é a DATA DE VENCIMENTO/PAGAMENTO da fatura, geralmente impressa no topo como "Vencimento", "Vencimento da fatura" ou "Pagar até" (formato YYYY-MM-DD; se não encontrar, use ""). um item por linha de compra; desc CURTA (máx 28 caracteres, só o nome do estabelecimento); valor sempre número com ponto decimal; data da compra (se só houver dia/mês, use o ano da fatura); categorize pelo estabelecimento (posto→Transporte, mercado→Mercado, restaurante/ifood→Alimentação, roupa→Vestuário, streaming→Assinaturas, farmácia→Saúde etc.). IGNORE: pagamento de fatura anterior, estorno, encargos/juros, IOF, anuidade se preferir Outros. Se não houver compras, {"vencimento":"","itens":[]}.`;
 
 function modalImportFatura(cardId) {
   if (!hasAIKey()) return toast("Configure sua chave da API Claude em Configurações para importar a fatura.");
@@ -1485,11 +1485,18 @@ async function importFatura(file, cardId, password) {
     const tot = faturaDraft.reduce((a, i) => a + +i.valor, 0);
     const card = CARDS.find(c => c.id === cardId);
     const dd = card?.dueDay ? Math.min(+card.dueDay, 28) : 10;
-    // vencimento típico: mês SEGUINTE ao da última compra, no dia de vencimento do cartão
-    const dts = faturaDraft.map(i => i.data).filter(Boolean).sort();
-    const baseM = dts.length ? new Date(dts[dts.length - 1] + "T12:00:00") : new Date();
-    baseM.setMonth(baseM.getMonth() + 1);
-    const payDefault = `${baseM.getFullYear()}-${String(baseM.getMonth() + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    // 1º: vencimento lido da própria fatura (robusto a corte via regex no texto bruto)
+    const vencRaw = parsed.extra.vencimento || (raw.match(/"vencimento"\s*:\s*"(\d{4}-\d{2}-\d{2})"/) || [])[1] || "";
+    const vencOk = /^\d{4}-\d{2}-\d{2}$/.test(vencRaw);
+    let payDefault, vencLido = false;
+    if (vencOk) { payDefault = vencRaw; vencLido = true; }
+    else {
+      // 2º: mês SEGUINTE ao da última compra, no dia de vencimento do cartão
+      const dts = faturaDraft.map(i => i.data).filter(Boolean).sort();
+      const baseM = dts.length ? new Date(dts[dts.length - 1] + "T12:00:00") : new Date();
+      baseM.setMonth(baseM.getMonth() + 1);
+      payDefault = `${baseM.getFullYear()}-${String(baseM.getMonth() + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    }
     status.innerHTML = `<div class="ai-box">✅ ${faturaDraft.length} compra(s) · total ${fmtBRL(tot)} — confira as categorias e importe.${avisoTrunc}</div>`;
     $("#fatResult").innerHTML = `
       <div class="ai-box" style="margin-top:10px; font-size:13px; display:flex; flex-direction:column; gap:8px">
@@ -1497,9 +1504,10 @@ async function importFatura(file, cardId, password) {
           <input type="checkbox" id="fatUsePay" checked style="width:16px;height:16px; margin-top:2px">
           <span>Lançar tudo pela <b>data de pagamento da fatura</b> — o dinheiro sai nesse mês (recomendado). Desmarque para manter a data de cada compra.</span>
         </label>
-        <div class="flex" id="fatPayWrap" style="gap:8px; align-items:center">
+        <div class="flex" id="fatPayWrap" style="gap:8px; align-items:center; flex-wrap:wrap">
           <span>Data de pagamento:</span>
           <input type="date" id="fatPayDate" value="${payDefault}" style="padding:6px 9px; border-radius:8px; border:1px solid var(--border); background:var(--page)">
+          ${vencLido ? '<span class="status-pill good">✓ vencimento lido da fatura</span>' : '<span class="muted" style="font-size:12px">(estimado — confira)</span>'}
         </div>
       </div>
       <div style="max-height:40vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-top:10px">
