@@ -3472,6 +3472,7 @@ Regras:
 - amount sempre número com ponto decimal. Ignore linhas de cabeçalho e de "Total". Se não houver investimentos, {"itens":[]}.`;
 
 let importDraft = [];
+let impPendingFiles = null;
 function modalImportInvest() {
   if (!hasAIKey()) return toast("Configure sua chave da API Claude em Configurações para importar.");
   openModal(`
@@ -3482,6 +3483,13 @@ function modalImportInvest() {
       <div class="flex" style="justify-content:center; margin-top:10px"><button class="btn small" id="impPick">Escolher arquivo(s)</button></div>
       <div class="muted" style="margin-top:8px; font-size:12px">Pode selecionar posição + movimentação juntas · .xlsx, .csv, .pdf, .png, .jpg</div>
       <input type="file" id="impFile" accept=".xlsx,.xls,.csv,.txt,.pdf,image/*" class="hidden" multiple>
+    </div>
+    <div id="impPwWrap" class="hidden section-gap">
+      <div class="ai-box" id="impPwMsg" style="background:var(--warn-soft, rgba(230,160,30,.12)); font-size:13px">🔒 O PDF é protegido por senha (comum no C6, Nubank…). Digite a senha para abrir.</div>
+      <div class="flex" style="gap:8px; margin-top:8px">
+        <input id="impPw" type="password" placeholder="Senha do PDF" style="flex:1; padding:9px 11px; border-radius:9px; border:1px solid var(--border); background:var(--page)">
+        <button class="btn" id="impPwGo">Abrir arquivo</button>
+      </div>
     </div>
     ${(() => { const n = INVEST.filter(i => i.imported).length; return n ? `<div class="flex spread" style="margin-top:12px; font-size:13px; color:var(--ink-2)"><span>Você tem ${n} lançamento(s) já importado(s).</span><button class="link-btn" id="impClear" style="color:var(--critical)">Remover importações anteriores</button></div>` : ""; })()}
     <div id="impStatus" class="section-gap"></div>
@@ -3496,6 +3504,8 @@ function modalImportInvest() {
   });
   $("#impPick").onclick = () => $("#impFile").click();
   $("#impFile").onchange = e => e.target.files.length && importReadFile([...e.target.files]);
+  $("#impPwGo").onclick = () => { const p = $("#impPw").value; if (impPendingFiles) importReadFile(impPendingFiles, p); };
+  $("#impPw").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#impPwGo").click(); } };
   const dz = $("#impDrop");
   dz.ondragover = e => { e.preventDefault(); dz.classList.add("drag"); };
   dz.ondragleave = () => dz.classList.remove("drag");
@@ -3562,12 +3572,38 @@ async function pdfToText(file, password) {
   return text;
 }
 
-async function importReadFile(files) {
+async function importReadFile(files, password) {
+  impPendingFiles = files;
   const status = $("#impStatus");
   status.innerHTML = `<div class="ai-box loading-dots">🤖 Lendo ${files.map(f => esc(f.name)).join(", ")}</div>`;
   $("#impResult").innerHTML = "";
   try {
-    const blocks = (await Promise.all(files.map(fileToContentBlock))).flat();
+    // PDFs passam pelo leitor com senha (extrai texto); demais formatos seguem normal
+    const blockGroups = [];
+    for (const file of files) {
+      const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+      if (isPdf) {
+        let text;
+        try { text = await pdfToText(file, password); }
+        catch (err) {
+          if (err.code === "NEED_PASSWORD" || err.code === "WRONG_PASSWORD") {
+            status.innerHTML = "";
+            $("#impPwWrap").classList.remove("hidden");
+            $("#impPwMsg").innerHTML = err.code === "WRONG_PASSWORD" ? "🔒 <b>Senha incorreta.</b> Tente de novo." : "🔒 O PDF é protegido por senha (comum no C6, Nubank…). Digite a senha para abrir.";
+            const inp = $("#impPw"); if (inp) { inp.value = ""; inp.focus(); }
+            return;
+          }
+          throw err;
+        }
+        const name = (file.name || "").toLowerCase();
+        const kind = name.includes("movimenta") ? "EXTRATO DE MOVIMENTAÇÕES" : name.includes("posic") || name.includes("posiç") ? "POSIÇÃO" : "ARQUIVO";
+        blockGroups.push([{ type: "text", text: `\n=== ${kind} (${file.name}) ===\n${(text || "").slice(0, 60000)}` }]);
+      } else {
+        blockGroups.push(await fileToContentBlock(file));
+      }
+    }
+    $("#impPwWrap") && $("#impPwWrap").classList.add("hidden");
+    const blocks = blockGroups.flat();
     const content = [
       { type: "text", text: files.length > 1 ? "Cruze a POSIÇÃO com as MOVIMENTAÇÕES: um item por ativo da posição, valor atual e data de aporte casada pelo código/ticker." : "Extraia os investimentos deste extrato." },
       ...blocks
