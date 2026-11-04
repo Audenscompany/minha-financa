@@ -23,6 +23,7 @@ let calYM = null;       // 'YYYY-MM' do calendário
 let budYM = null;       // 'YYYY-MM' do orçamento (mês planejado)
 let cardYM = null;      // 'YYYY-MM' da aba Cartões
 let faturaDraft = [];
+let extratoDraft = [], extratoFile = null;
 let flowRange = "12";   // 6 | 12 | ano  (gráfico de fluxo)
 let analysisPeriod = "mes"; // mes | m3 | m6 (análise de gastos)
 
@@ -967,6 +968,7 @@ function viewTransacoes() {
   <div class="view-head">
     <div><h2>Transações</h2><div class="sub">Entradas e saídas registradas</div></div>
     <div class="flex">
+      <button class="btn secondary" id="btnImportExtrato">📄 Importar extrato</button>
       <button class="btn secondary" data-goto="comprovante">📸 Ler comprovante</button>
       <button class="btn" id="btnQuickAdd">+ Nova</button>
     </div>
@@ -1477,6 +1479,135 @@ async function importFatura(file, cardId, password) {
         }
         closeModal(); toast(`💳 ${chosen.length} compra(s) importada(s) da fatura!`);
       } catch (e) { toast("Erro: " + e.message); $("#fatConfirm").disabled = false; }
+    };
+  } catch (e) {
+    status.innerHTML = `<div class="ai-box" style="background:rgba(208,59,59,.1)">⚠️ ${esc(e.message)}</div>`;
+  }
+}
+
+// ============================================================
+// IMPORTAR EXTRATO BANCÁRIO (entradas + saídas, aprovação por linha)
+// ============================================================
+const EXTRATO_SYS = `Você extrai as MOVIMENTAÇÕES de um extrato bancário brasileiro (conta corrente, conta digital ou poupança). Responda APENAS com JSON válido, sem markdown:
+{"itens":[{"data":"YYYY-MM-DD","descricao":"texto curto do lançamento","valor":123.45,"tipo":"entrada|saida","categoria":"uma categoria"}]}
+Regras: um item por lançamento. valor SEMPRE positivo com ponto decimal. tipo=entrada para créditos (PIX/TED recebido, salário, depósito, rendimento, estorno a favor); tipo=saida para débitos (PIX/TED enviado, compra no débito, boleto, tarifa, saque, pagamento). Para SAÍDA use uma de: ${CATS_OUT_BASE.join(", ")}. Para ENTRADA use uma de: ${["Salário/Pró-labore","Freelance","Rendimentos","Reembolso","Presente","Outros"].join(", ")}. Pelo texto, categorize (posto→Transporte, mercado/supermercado→Mercado, ifood/restaurante→Alimentação, farmácia→Saúde, tarifa/juros→Impostos/Taxas). IGNORE linhas de saldo (saldo anterior, saldo do dia, saldo disponível), totais e cabeçalhos. Se a data tiver só dia/mês, use o ano do extrato. Sem movimentações → {"itens":[]}.`;
+
+function extMethod(desc) {
+  const d = (desc || "").toLowerCase();
+  if (d.includes("pix")) return "PIX";
+  if (d.includes("boleto")) return "Boleto";
+  if (d.includes("ted") || d.includes("transfer") || d.includes("doc")) return "Transferência";
+  if (d.includes("saque") || d.includes("dinheiro")) return "Dinheiro";
+  if (d.includes("débito") || d.includes("debito")) return "Cartão de débito";
+  return "Transferência";
+}
+
+function modalImportExtrato() {
+  if (!hasAIKey()) return toast("Configure sua chave da API Claude em Configurações para importar o extrato.");
+  extratoFile = null; extratoDraft = [];
+  openModal(`
+    <h3>Importar extrato bancário</h3>
+    <p class="muted" style="margin:-8px 0 12px; font-size:13px">Envie o extrato (PDF, print ou CSV). A IA separa cada entrada e saída, sugere a categoria, e <b>você aprova linha por linha</b> antes de salvar.</p>
+    <div class="dropzone" id="extDrop">
+      <span class="big">📄</span><b>Arraste o extrato aqui</b><br>ou
+      <div class="flex" style="justify-content:center; margin-top:10px"><button class="btn small" id="extPick">Escolher arquivo</button></div>
+      <div class="muted" style="margin-top:8px; font-size:12px">.pdf, .png, .jpg, .csv</div>
+      <input type="file" id="extFile" accept=".pdf,.csv,.txt,image/*" class="hidden">
+    </div>
+    <div id="extPwWrap" class="hidden section-gap">
+      <div class="ai-box" id="extPwMsg" style="background:var(--warn-soft, rgba(230,160,30,.12)); font-size:13px">🔒 Este extrato é protegido por senha. Digite a senha do PDF para abrir.</div>
+      <div class="flex" style="gap:8px; margin-top:8px">
+        <input id="extPw" type="password" placeholder="Senha do PDF" style="flex:1; padding:9px 11px; border-radius:9px; border:1px solid var(--border); background:var(--page)">
+        <button class="btn" id="extPwGo">Abrir extrato</button>
+      </div>
+    </div>
+    <div id="extStatus" class="section-gap"></div>
+    <div id="extResult"></div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Fechar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#extPick").onclick = () => $("#extFile").click();
+  $("#extFile").onchange = e => e.target.files[0] && importExtrato(e.target.files[0]);
+  $("#extPwGo").onclick = () => { const p = $("#extPw").value; if (extratoFile) importExtrato(extratoFile, p); };
+  $("#extPw").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#extPwGo").click(); } };
+  const dz = $("#extDrop");
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add("drag"); };
+  dz.ondragleave = () => dz.classList.remove("drag");
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("drag"); e.dataTransfer.files[0] && importExtrato(e.dataTransfer.files[0]); };
+}
+
+async function importExtrato(file, password) {
+  extratoFile = file;
+  const status = $("#extStatus");
+  status.innerHTML = `<div class="ai-box loading-dots">🤖 Lendo o extrato</div>`;
+  $("#extResult").innerHTML = "";
+  try {
+    let blocks;
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+    if (isPdf) {
+      let text;
+      try { text = await pdfToText(file, password); }
+      catch (err) {
+        if (err.code === "NEED_PASSWORD" || err.code === "WRONG_PASSWORD") {
+          status.innerHTML = "";
+          $("#extPwWrap").classList.remove("hidden");
+          $("#extPwMsg").innerHTML = err.code === "WRONG_PASSWORD" ? "🔒 <b>Senha incorreta.</b> Tente de novo." : "🔒 Este extrato é protegido por senha. Digite a senha do PDF para abrir.";
+          const inp = $("#extPw"); if (inp) { inp.value = ""; inp.focus(); }
+          return;
+        }
+        throw err;
+      }
+      $("#extPwWrap") && $("#extPwWrap").classList.add("hidden");
+      if (!text || text.replace(/\s/g, "").length < 20) throw new Error("Não consegui ler o texto deste PDF (pode ser escaneado). Tente enviar um print (imagem).");
+      blocks = [{ type: "text", text: "Conteúdo extraído do extrato (PDF):\n\n" + text.slice(0, 70000) }];
+    } else {
+      blocks = await fileToContentBlock(file);
+    }
+    const raw = await callClaude({ maxTokens: 6000, system: EXTRATO_SYS, messages: [{ role: "user", content: [{ type: "text", text: "Extraia todas as movimentações deste extrato." }, ...blocks] }] });
+    const json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    extratoDraft = (json.itens || []).filter(i => +i.valor > 0).map(i => ({ ...i, tipo: i.tipo === "entrada" ? "entrada" : "saida" }));
+    if (!extratoDraft.length) throw new Error("Nenhuma movimentação encontrada no extrato.");
+    const nIn = extratoDraft.filter(i => i.tipo === "entrada").length, nOut = extratoDraft.length - nIn;
+    const totIn = extratoDraft.filter(i => i.tipo === "entrada").reduce((a, i) => a + +i.valor, 0);
+    const totOut = extratoDraft.filter(i => i.tipo === "saida").reduce((a, i) => a + +i.valor, 0);
+    status.innerHTML = `<div class="ai-box">✅ ${extratoDraft.length} movimentação(ões): ${nIn} entrada(s) (${fmtBRL(totIn)}) e ${nOut} saída(s) (${fmtBRL(totOut)}). Revise e aprove o que quer salvar.</div>`;
+    $("#extResult").innerHTML = `
+      <div class="flex" style="gap:10px; margin:10px 0 8px; font-size:13px">
+        <button class="link-btn" id="extAll">Marcar todas</button><span style="color:var(--ink-3)">·</span>
+        <button class="link-btn" id="extNone">Desmarcar todas</button>
+      </div>
+      <div style="max-height:46vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px">
+        ${extratoDraft.map((i, idx) => {
+          const cats = i.tipo === "entrada" ? ["Salário/Pró-labore","Freelance","Rendimentos","Reembolso","Presente","Outros"] : catsOut();
+          return `<div class="flex" style="gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--border); border-radius:9px">
+            <input type="checkbox" class="ext-chk" data-i="${idx}" checked style="width:16px;height:16px">
+            <span class="status-pill ${i.tipo === "entrada" ? "good" : "crit"}" style="flex-shrink:0">${i.tipo === "entrada" ? "entrada" : "saída"}</span>
+            <div style="flex:1; min-width:0"><b style="font-size:13px">${esc(i.descricao || "Movimentação")}</b>
+              <div class="muted" style="font-size:11.5px">${i.data ? i.data.split("-").reverse().join("/") : "sem data"}</div></div>
+            <select class="ext-cat" data-i="${idx}" style="padding:5px 8px; border-radius:7px; border:1px solid var(--border); background:var(--page); font-size:12px; max-width:120px">
+              ${cats.map(c => `<option ${c === i.categoria ? "selected" : ""}>${c}</option>`).join("")}</select>
+            <b style="font-variant-numeric:tabular-nums; white-space:nowrap; color:${i.tipo === "entrada" ? "var(--good-text)" : "var(--critical)"}">${i.tipo === "entrada" ? "+" : "−"}${fmtBRL(+i.valor)}</b>
+          </div>`;
+        }).join("")}
+      </div>
+      <button class="btn" id="extConfirm" style="width:100%; justify-content:center; margin-top:12px">✅ Aprovar e salvar selecionadas</button>`;
+    $("#extAll").onclick = () => document.querySelectorAll(".ext-chk").forEach(c => c.checked = true);
+    $("#extNone").onclick = () => document.querySelectorAll(".ext-chk").forEach(c => c.checked = false);
+    $("#extConfirm").onclick = async () => {
+      const chosen = [...document.querySelectorAll(".ext-chk:checked")].map(c => +c.dataset.i);
+      if (!chosen.length) return toast("Marque ao menos uma movimentação.");
+      $("#extConfirm").disabled = true; $("#extConfirm").textContent = "Salvando…";
+      try {
+        for (const idx of chosen) {
+          const i = extratoDraft[idx];
+          const cat = document.querySelector(`.ext-cat[data-i="${idx}"]`)?.value || i.categoria || "Outros";
+          await addDoc(collection(db, "households", hid, "transactions"), {
+            type: i.tipo, amount: +i.valor, date: i.data || todayISO(),
+            desc: i.descricao || "Movimentação", category: cat, method: extMethod(i.descricao),
+            createdBy: user.email, createdAt: new Date().toISOString(), imported: true, source: "extrato"
+          });
+        }
+        closeModal(); toast(`📄 ${chosen.length} movimentação(ões) importada(s) do extrato!`);
+      } catch (e) { toast("Erro: " + e.message); $("#extConfirm").disabled = false; }
     };
   } catch (e) {
     status.innerHTML = `<div class="ai-box" style="background:rgba(208,59,59,.1)">⚠️ ${esc(e.message)}</div>`;
@@ -3454,6 +3585,7 @@ function attachHandlers() {
   // navegação interna
   document.querySelectorAll("[data-goto]").forEach(b => b.onclick = e => { e.preventDefault(); switchView(b.dataset.goto); });
   $("#btnQuickAdd") && ($("#btnQuickAdd").onclick = () => modalTx());
+  $("#btnImportExtrato") && ($("#btnImportExtrato").onclick = modalImportExtrato);
 
   // dashboard: seletor de período global + drill-down de categoria + selects dos painéis
   document.querySelectorAll("[data-period]").forEach(b => b.onclick = () => { dashPeriod = b.dataset.period; render(); });
