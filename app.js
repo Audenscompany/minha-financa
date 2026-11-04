@@ -1274,6 +1274,7 @@ function viewCartoes() {
           <div class="flex">
             <button class="btn secondary small" data-imp-fatura="${c.id}"><span class="ico" data-ic="file" style="width:13px;height:13px"></span> Importar fatura</button>
             <button class="btn secondary small" data-add-compra="${c.id}">+ Compra</button>
+            <button class="btn secondary small" data-card-dates="${c.id}">📅 Data de pagamento</button>
             <button class="icon-btn" data-edit-card="${c.id}">✏️</button>
             <button class="icon-btn" data-del-card="${c.id}">🗑️</button>
           </div>
@@ -1349,6 +1350,42 @@ function modalCardPurchase(cardId) {
       });
       closeModal(); toast("Compra registrada no cartão.");
     } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+
+// Ajusta a data de pagamento: move as compras do cartão para o mês em que a fatura vence
+function modalCardPayDate(cardId) {
+  const card = CARDS.find(c => c.id === cardId);
+  const txs = TX.filter(t => t.card === cardId);
+  if (!txs.length) return toast("Este cartão ainda não tem compras lançadas.");
+  // meses que têm compras hoje (origem)
+  const meses = [...new Set(txs.map(t => monthKey(t.date)))].sort();
+  const dd = card?.dueDay ? Math.min(+card.dueDay, 28) : 10;
+  // sugestão: mês seguinte ao mês com mais compras, no dia de vencimento
+  const cont = {}; txs.forEach(t => { const m = monthKey(t.date); cont[m] = (cont[m] || 0) + 1; });
+  const mesPrincipal = Object.entries(cont).sort((a, b) => b[1] - a[1])[0][0];
+  const mp = new Date(mesPrincipal + "-01T12:00:00"); mp.setMonth(mp.getMonth() + 1);
+  const sugestao = `${mp.getFullYear()}-${String(mp.getMonth() + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  openModal(`
+    <h3>Data de pagamento — ${esc(card?.name || "cartão")}</h3>
+    <p class="muted" style="margin:-4px 0 12px; font-size:13px">O que conta é <b>quando você paga a fatura</b>. Mesmo que a compra seja de outro mês, o gasto entra no mês do pagamento. Escolha o mês de origem e a data de vencimento.</p>
+    <div class="field"><label>Mover as compras de</label>
+      <select id="cpdFrom">${meses.map(m => `<option value="${m}">${monthLabel(m)} (${cont[m]} compra(s))</option>`).join("")}<option value="__all">Todos os meses (${txs.length})</option></select></div>
+    <div class="field"><label>Para a data de pagamento (vencimento da fatura)</label><input type="date" id="cpdDate" value="${sugestao}"></div>
+    <div class="ai-box" style="font-size:12.5px">As compras selecionadas passam para essa data. O valor e a categoria de cada uma continuam iguais.</div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Aplicar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const from = $("#cpdFrom").value, date = $("#cpdDate").value;
+    if (!date) return toast("Escolha a data de pagamento.");
+    const alvo = txs.filter(t => from === "__all" || monthKey(t.date) === from);
+    if (!alvo.length) return toast("Nenhuma compra nesse mês.");
+    $("#mSave").disabled = true; $("#mSave").textContent = "Aplicando…";
+    try {
+      for (const t of alvo) await updateDoc(doc(db, "households", hid, "transactions", t.id), { date });
+      cardYM = date.slice(0, 7);
+      closeModal(); toast(`📅 ${alvo.length} compra(s) movida(s) para ${monthLabel(date.slice(0, 7))}.`);
+    } catch (e) { toast("Erro: " + e.message); $("#mSave").disabled = false; }
   };
 }
 
@@ -1447,8 +1484,12 @@ async function importFatura(file, cardId, password) {
     const avisoTrunc = parsed.truncado ? ' <b>A fatura é grande e pode ter sido cortada</b> — confira o total; se faltou compra, importe o restante numa segunda leitura.' : "";
     const tot = faturaDraft.reduce((a, i) => a + +i.valor, 0);
     const card = CARDS.find(c => c.id === cardId);
-    const curYm = todayISO().slice(0, 7);
-    const payDefault = card?.dueDay ? `${curYm}-${String(Math.min(+card.dueDay, 28)).padStart(2, "0")}` : todayISO();
+    const dd = card?.dueDay ? Math.min(+card.dueDay, 28) : 10;
+    // vencimento típico: mês SEGUINTE ao da última compra, no dia de vencimento do cartão
+    const dts = faturaDraft.map(i => i.data).filter(Boolean).sort();
+    const baseM = dts.length ? new Date(dts[dts.length - 1] + "T12:00:00") : new Date();
+    baseM.setMonth(baseM.getMonth() + 1);
+    const payDefault = `${baseM.getFullYear()}-${String(baseM.getMonth() + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
     status.innerHTML = `<div class="ai-box">✅ ${faturaDraft.length} compra(s) · total ${fmtBRL(tot)} — confira as categorias e importe.${avisoTrunc}</div>`;
     $("#fatResult").innerHTML = `
       <div class="ai-box" style="margin-top:10px; font-size:13px; display:flex; flex-direction:column; gap:8px">
@@ -3669,6 +3710,7 @@ function attachHandlers() {
   });
   document.querySelectorAll("[data-imp-fatura]").forEach(b => b.onclick = () => modalImportFatura(b.dataset.impFatura));
   document.querySelectorAll("[data-add-compra]").forEach(b => b.onclick = () => modalCardPurchase(b.dataset.addCompra));
+  document.querySelectorAll("[data-card-dates]").forEach(b => b.onclick = () => modalCardPayDate(b.dataset.cardDates));
   document.querySelectorAll("[data-edit-card]").forEach(b => b.onclick = () => modalCard(CARDS.find(c => c.id === b.dataset.editCard)));
   document.querySelectorAll("[data-del-card]").forEach(b => b.onclick = async () => {
     const c = CARDS.find(x => x.id === b.dataset.delCard);
