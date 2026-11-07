@@ -17,31 +17,31 @@
   --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948;
   --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
   --good-text:#006300;
-  --accent:#2a78d6; --accent-soft:rgba(42,120,214,.10);
+  --accent:#e85d1a; --accent-soft:rgba(232,93,26,.10);
   --radius:14px; --shadow:0 1px 3px rgba(11,11,11,.06), 0 4px 16px rgba(11,11,11,.05);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     color-scheme: dark;
-    --surface-1:#1a1a19; --page:#0d0d0d;
+    --surface-1:#18181b; --page:#0c0c0e;
     --ink-1:#ffffff; --ink-2:#c3c2b7; --ink-3:#898781;
     --grid:#2c2c2a; --baseline:#383835;
     --border:rgba(255,255,255,.10);
     --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
     --good-text:#0ca30c;
-    --accent:#3987e5; --accent-soft:rgba(57,135,229,.14);
+    --accent:#ff7a45; --accent-soft:rgba(255,122,69,.16);
     --shadow:0 1px 3px rgba(0,0,0,.35), 0 4px 16px rgba(0,0,0,.25);
   }
 }
 :root[data-theme="dark"]{
   color-scheme: dark;
-  --surface-1:#1a1a19; --page:#0d0d0d;
+  --surface-1:#18181b; --page:#0c0c0e;
   --ink-1:#ffffff; --ink-2:#c3c2b7; --ink-3:#898781;
   --grid:#2c2c2a; --baseline:#383835;
   --border:rgba(255,255,255,.10);
   --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
   --good-text:#0ca30c;
-  --accent:#3987e5; --accent-soft:rgba(57,135,229,.14);
+  --accent:#ff7a45; --accent-soft:rgba(255,122,69,.16);
   --shadow:0 1px 3px rgba(0,0,0,.35), 0 4px 16px rgba(0,0,0,.25);
 }
 
@@ -97,7 +97,8 @@ aside{
   color:var(--ink-2); font-size:14.5px; font-weight:500;
 }
 .nav-btn:hover{background:var(--accent-soft); color:var(--ink-1);}
-.nav-btn.active{background:var(--accent-soft); color:var(--accent); font-weight:600;}
+.nav-btn.active{background:var(--accent); color:#fff; font-weight:600; box-shadow:0 4px 12px rgba(224,83,26,.25);}
+.nav-btn.active svg{color:#fff;}
 .nav-btn .ico{width:20px; text-align:center;}
 .sidebar-foot{margin-top:auto; padding:10px; font-size:13px; color:var(--ink-3); display:flex; flex-direction:column; gap:8px;}
 .user-chip{display:flex; align-items:center; gap:9px;}
@@ -238,7 +239,7 @@ main{flex:1; padding:26px 30px 90px; max-width:1120px; margin:0 auto; width:100%
 @media (max-width:1100px){ .hero-grid{grid-template-columns:1fr 1fr;} .hero-grid .home-hero{grid-column:1 / -1;} .row4{grid-template-columns:1fr 1fr;} .panel-3{grid-template-columns:1fr;} }
 @media (max-width:560px){ .hero-grid{grid-template-columns:1fr;} .row4{grid-template-columns:1fr;} }
 .home-hero{position:relative; overflow:hidden; border-radius:18px; padding:24px; color:#fff;
-  background:linear-gradient(135deg,#3563d6,#2f56c4); box-shadow:0 8px 24px rgba(47,86,196,.28);}
+  background:linear-gradient(135deg,#f2722f,#e0531a); box-shadow:0 8px 24px rgba(224,83,26,.30);}
 .home-hero .hh-label{font-size:13.5px; opacity:.9; display:flex; align-items:center; gap:6px;}
 .home-hero .hh-val{font-size:clamp(30px,5vw,42px); font-weight:700; margin:8px 0 6px; font-variant-numeric:tabular-nums;}
 .home-hero .hh-delta{font-size:13px; opacity:.95; display:flex; align-items:center; gap:5px;}
@@ -613,7 +614,7 @@ svg text{font-family:inherit;}
 <div id="toast"></div>
 <div id="modalBack" class="hidden"><div class="modal" id="modalBox"></div></div>
 
-<script src="firebase-config.js?v=42"></script>
-<script type="module" src="app.js?v=42"></script>
+<script src="firebase-config.js?v=43"></script>
+<script type="module" src="app.js?v=43"></script>
 </body>
 </html>
