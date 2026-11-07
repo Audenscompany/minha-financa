@@ -13,7 +13,7 @@ import {
 
 // ---------- Estado global ----------
 let app, auth, db, user = null, hid = null;
-let TX = [], DEBTS = [], INVEST = [], BILLS = [], CARDS = [], SETTINGS = {}, HOUSEHOLD = {};
+let TX = [], DEBTS = [], INVEST = [], BILLS = [], CARDS = [], BANKS = [], SETTINGS = {}, HOUSEHOLD = {};
 let currentView = "dashboard";
 let unsubs = [];
 let chatHistory = [];
@@ -103,6 +103,7 @@ const ICONS = {
   car: '<path d="M4 12l1.6-4.4A2 2 0 0 1 7.5 6h9a2 2 0 0 1 1.9 1.6L20 12"/><path d="M3 12h18v5H3z"/><circle cx="7" cy="17.5" r="1.3"/><circle cx="17" cy="17.5" r="1.3"/>',
   shirt: '<path d="M8 3l4 3 4-3 4 4-3 2v11H7V9L4 7Z"/>',
   card: '<rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 10h19"/>',
+  bank: '<path d="M3 10h18"/><path d="M5 10v8M10 10v8M14 10v8M19 10v8"/><path d="M12 3 21 8H3Z"/><path d="M4 21h16"/>',
   fork: '<path d="M6 3v7a2 2 0 0 0 4 0V3"/><path d="M8 10v11"/><path d="M17 3c-1.7 0-3 2-3 5s1 4 2 4v9"/>',
   paw: '<circle cx="8" cy="9" r="1.6"/><circle cx="16" cy="9" r="1.6"/><circle cx="5.5" cy="13.5" r="1.4"/><circle cx="18.5" cy="13.5" r="1.4"/><path d="M12 13c-2.5 0-4 1.8-4 3.6C8 18.4 9.5 19 12 19s4-.6 4-2.4C16 14.8 14.5 13 12 13Z"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
@@ -205,6 +206,7 @@ async function enterApp() {
   listen("investments", arr => { INVEST = arr.sort((a,b) => b.date.localeCompare(a.date)); });
   listen("bills", arr => { BILLS = arr.sort((a,b) => (a.dueDate||"").localeCompare(b.dueDate||"")); });
   listen("cards", arr => { CARDS = arr.sort((a,b) => (a.name||"").localeCompare(b.name||"")); });
+  listen("banks", arr => { BANKS = arr.sort((a,b) => (a.name||"").localeCompare(b.name||"")); });
   unsubs.push(onSnapshot(doc(db, "households", hid, "meta", "settings"), s => {
     SETTINGS = s.exists() ? s.data() : {};
     render();
@@ -454,7 +456,7 @@ function render() {
   const el = $("#mainContent");
   if (!el) return;
   const views = {
-    dashboard: viewDashboard, saude: viewSaude, calendario: viewCalendario, cartoes: viewCartoes, transacoes: viewTransacoes, comprovante: viewComprovante,
+    dashboard: viewDashboard, saude: viewSaude, calendario: viewCalendario, cartoes: viewCartoes, bancos: viewBancos, transacoes: viewTransacoes, comprovante: viewComprovante,
     dividas: viewDividas, boletos: viewBoletos, orcamento: viewOrcamento, investimentos: viewInvest,
     plano: viewPlano, consultor: viewConsultor, config: viewConfig
   };
@@ -1687,6 +1689,80 @@ async function importExtrato(file, password) {
   } catch (e) {
     status.innerHTML = `<div class="ai-box" style="background:rgba(208,59,59,.1)">⚠️ ${esc(e.message)}</div>`;
   }
+}
+
+// ============================================================
+// VIEW: BANCOS (saldo real por conta)
+// ============================================================
+const BANK_TYPES = ["Conta corrente", "Conta digital", "Poupança", "Carteira", "Investimentos"];
+function banksTotal() { return BANKS.reduce((a, b) => a + (+b.balance || 0), 0); }
+function viewBancos() {
+  const total = banksTotal();
+  return `
+  <div class="view-head">
+    <div><h2>Bancos</h2><div class="sub">Suas contas e o saldo real em cada uma</div></div>
+    <button class="btn" id="btnAddBank"><span class="ico" data-ic="plus" style="width:14px;height:14px"></span> Nova conta</button>
+  </div>
+
+  <div class="bkpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+    <div class="bkpi"><div class="bk-label">Saldo total em contas</div>
+      <div class="bk-val" style="color:${total >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(total)}</div>
+      <div class="bk-foot"><span class="ico">${icon("bank")}</span> ${BANKS.length} conta(s)</div></div>
+  </div>
+
+  ${!BANKS.length ? `<div class="panel section-gap"><div class="empty"><span class="big">🏦</span>
+    Você ainda não cadastrou nenhuma conta.<br>Clique em <b>Nova conta</b> e informe o saldo atual de cada banco.</div></div>`
+    : `<div class="row4" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); margin-top:16px">
+      ${BANKS.map(b => `<div class="kpi-card" style="gap:6px">
+        <div class="flex spread">
+          <div class="badge-ic b">${icon("bank")}</div>
+          <div class="flex" style="gap:2px">
+            <button class="icon-btn" data-edit-bank="${b.id}" title="Editar">✏️</button>
+            <button class="icon-btn" data-del-bank="${b.id}" title="Excluir">🗑️</button>
+          </div>
+        </div>
+        <div class="kc-label" style="margin-top:4px">${esc(b.name)}</div>
+        <div class="kc-val" style="color:${(+b.balance||0) >= 0 ? "var(--ink-1)" : "var(--critical)"}">${fmtBRL(+b.balance || 0)}</div>
+        <div class="kc-ctx">${esc(b.type || "Conta")}</div>
+        <button class="btn secondary small" data-adjust-bank="${b.id}" style="margin-top:8px; width:100%; justify-content:center">Atualizar saldo</button>
+      </div>`).join("")}
+    </div>
+    <div class="ai-box section-gap" style="font-size:13px">💡 O saldo é atualizado por você — informe o valor que aparece no app do banco. Assim você tem a posição real de caixa somando todas as contas.</div>`}`;
+}
+function modalBank(b = null) {
+  const t = b || {};
+  openModal(`
+    <h3>${b ? "Editar" : "Nova"} conta</h3>
+    <div class="field"><label>Nome da conta / banco</label><input id="bkName" value="${esc(t.name || "")}" placeholder="Ex.: Nubank, C6, Itaú, Carteira"></div>
+    <div class="form-row">
+      <div class="field"><label>Tipo</label><select id="bkType">${BANK_TYPES.map(x => `<option ${t.type === x ? "selected" : ""}>${x}</option>`).join("")}</select></div>
+      <div class="field"><label>Saldo atual (R$)</label><input id="bkBal" inputmode="decimal" value="${t.balance != null ? String(t.balance).replace(".", ",") : ""}" placeholder="0,00"></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Salvar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    const name = $("#bkName").value.trim();
+    if (!name) return toast("Dê um nome à conta.");
+    const data = { name, type: $("#bkType").value, balance: parseMoney($("#bkBal").value) || 0, updatedAt: new Date().toISOString() };
+    try {
+      if (b) await updateDoc(doc(db, "households", hid, "banks", b.id), data);
+      else await addDoc(collection(db, "households", hid, "banks"), data);
+      closeModal(); toast("Conta salva.");
+    } catch (e) { toast("Erro: " + e.message); }
+  };
+}
+function modalAdjustBank(id) {
+  const b = BANKS.find(x => x.id === id); if (!b) return;
+  openModal(`
+    <h3>Atualizar saldo — ${esc(b.name)}</h3>
+    <p class="muted" style="margin:-4px 0 12px; font-size:13px">Saldo atual registrado: <b>${fmtBRL(+b.balance || 0)}</b>. Informe o novo saldo (o que aparece no app do banco).</p>
+    <div class="field"><label>Novo saldo (R$)</label><input id="adjBal" inputmode="decimal" value="${String(b.balance || 0).replace(".", ",")}"></div>
+    <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Salvar</button></div>`);
+  $("#mCancel").onclick = closeModal;
+  $("#mSave").onclick = async () => {
+    try { await updateDoc(doc(db, "households", hid, "banks", id), { balance: parseMoney($("#adjBal").value) || 0, updatedAt: new Date().toISOString() }); closeModal(); toast("Saldo atualizado."); }
+    catch (e) { toast("Erro: " + e.message); }
+  };
 }
 
 // ============================================================
@@ -3774,6 +3850,15 @@ function attachHandlers() {
   const cardM = $("#cardMonth");
   if (cardM) cardM.onchange = () => { cardYM = cardM.value; render(); };
   $("#btnAddCard") && ($("#btnAddCard").onclick = () => modalCard());
+
+  // bancos
+  $("#btnAddBank") && ($("#btnAddBank").onclick = () => modalBank());
+  document.querySelectorAll("[data-edit-bank]").forEach(b => b.onclick = () => modalBank(BANKS.find(x => x.id === b.dataset.editBank)));
+  document.querySelectorAll("[data-adjust-bank]").forEach(b => b.onclick = () => modalAdjustBank(b.dataset.adjustBank));
+  document.querySelectorAll("[data-del-bank]").forEach(b => b.onclick = async () => {
+    const bk = BANKS.find(x => x.id === b.dataset.delBank);
+    if (confirm(`Remover a conta "${bk?.name || ""}"?`)) await deleteDoc(doc(db, "households", hid, "banks", b.dataset.delBank));
+  });
   $("#btnClearOrphan") && ($("#btnClearOrphan").onclick = async () => {
     const orfas = TX.filter(t => t.card && !CARDS.some(c => c.id === t.card));
     if (!orfas.length || !confirm(`Remover ${orfas.length} compra(s) de cartão(ões) que não existem mais? Isso apaga esses lançamentos das transações.`)) return;
