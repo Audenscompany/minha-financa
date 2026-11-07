@@ -548,6 +548,13 @@ function viewDashboard() {
   const savingsGoal = SETTINGS.savingsGoalPct ?? 30;
   const sparkOut = lastMonths(7).map(m => monthTotals(m).outs);
   const dsel = (id, opts, val) => `<select class="mini" data-sel="${id}">${opts.map(([k, l]) => `<option value="${k}" ${val === k ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  const today = todayISO();
+  const in15 = isoLocal(new Date(Date.now() + 15 * 864e5));
+  const pend = pendingBills();
+  const aVencer = pend.filter(b => b.dueDate && b.dueDate >= today && b.dueDate <= in15).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  const atraso = pend.filter(b => b.dueDate && b.dueDate < today).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  const aVencerTot = aVencer.reduce((a, b) => a + b.amount, 0), atrasoTot = atraso.reduce((a, b) => a + b.amount, 0);
+  const dDays = iso => Math.round((new Date(iso + "T12:00:00") - new Date(today + "T12:00:00")) / 864e5);
 
   return `
   <div class="dash-head">
@@ -561,88 +568,81 @@ function viewDashboard() {
     </div>
   </div>
 
-  <!-- Linha 1: hero + KPIs -->
-  <div class="hero-grid">
-    <div class="home-hero">
-      <div class="hh-ico">${icon("activity", 20)}</div>
-      <div class="hh-label">Resultado ${mks.length > 1 ? "do período" : "do mês"} <span title="Recebido menos gasto no período selecionado." style="opacity:.8; cursor:help">ⓘ</span></div>
-      <div class="hh-val">${fmtBRL(saldo)}</div>
-      <div class="hh-delta">${deltaCtx(saldo, prevSaldo, { plain: true, light: true }).html}</div>
-      <div class="hh-bg">${heroBg()}</div>
+  <!-- Resumo financeiro: 4 cards -->
+  <div class="kpi4">
+    <div class="kpi-card">
+      <div class="badge-ic g">${icon("trend-up")}</div>
+      <div class="kc-label">Receitas</div>
+      <div class="kc-val" style="color:var(--good-text)">${fmtBRL(cur.ins)}</div>
+      <div class="kc-ctx">${(cur.ins || prev.ins) ? deltaCtx(cur.ins, prev.ins).html : "—"}</div>
     </div>
     <div class="kpi-card">
-      <div class="badge-ic g">${icon("trend-down")}</div>
-      <div class="kc-label">Recebido</div>
-      <div class="kc-val">${fmtBRL(cur.ins)}</div>
-      <div class="kc-ctx">${cur.ins ? deltaCtx(cur.ins, prev.ins).html : "—"}</div>
-    </div>
-    <div class="kpi-card">
-      <div class="badge-ic r">${icon("trend-up")}</div>
-      <div class="kc-label">Gasto</div>
-      <div class="kc-val">${fmtBRL(cur.outs)}</div>
+      <div class="badge-ic r">${icon("trend-down")}</div>
+      <div class="kc-label">Despesas</div>
+      <div class="kc-val" style="color:var(--critical)">${fmtBRL(cur.outs)}</div>
       <div class="kc-ctx">${deltaCtx(cur.outs, prev.outs, { goodDown: true }).html}</div>
-      <div class="kc-spark">${sparkline(sparkOut, "var(--s2)")}</div>
+    </div>
+    <div class="kpi-card hot">
+      <div class="badge-ic">${icon("activity")}</div>
+      <div class="kc-label">Resultado <span title="Receitas menos despesas no período." style="opacity:.8; cursor:help">ⓘ</span></div>
+      <div class="kc-val">${fmtBRL(saldo)}</div>
+      <div class="kc-ctx">${deltaCtx(saldo, prevSaldo, { light: true }).html}</div>
     </div>
     <div class="kpi-card">
-      <div class="badge-ic b">${icon("pie")}</div>
-      <div class="kc-label">Taxa de economia</div>
-      <div class="kc-val">${savings == null ? "—" : savings.toFixed(0) + "%"}</div>
-      <div class="kc-ctx">${savings == null ? "sem receita no período" : `meta ${savingsGoal}% ${savings >= savingsGoal ? '· <span class="trend pos">✓ batida</span>' : ""}`}</div>
-    </div>
-  </div>
-
-  <!-- Linha 2: a vencer / investido / projetado / alertas -->
-  <div class="row4">
-    <div class="kpi-card">
-      <div class="badge-ic b">${icon("file")}</div>
-      <div class="kc-label">A vencer (15 dias)</div>
-      <div class="kc-val">${fmtBRL0(u.total)}</div>
-      <div class="kc-ctx">${u.count ? u.count + " conta(s)" : "nada a vencer"}</div>
-    </div>
-    <div class="kpi-card" data-goto="investimentos" style="cursor:pointer">
-      <div class="badge-ic v">${icon("trend-up")}</div>
-      <div class="kc-label">Patrimônio investido</div>
-      <div class="kc-val">${fmtBRL0(invS.patrimonio)}</div>
-      <div class="kc-ctx">${invS.rend > 0 ? `<span class="trend pos">↑ ${invS.rentPct.toFixed(1)}%</span> · ` : ""}${invPer > 0 ? fmtBRL0(invPer) + " no mês" : "meta: " + fmtBRL0(plan.pmt)}</div>
-    </div>
-    <div class="kpi-card">
-      <div class="badge-ic g">${icon("wallet")}</div>
-      <div class="kc-label">Saldo projetado</div>
-      <div class="kc-val" style="color:${f.saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL0(f.saldo)}</div>
+      <div class="badge-ic b">${icon("wallet")}</div>
+      <div class="kc-label">Saldo disponível</div>
+      <div class="kc-val" style="color:${f.saldo >= 0 ? "var(--good-text)" : "var(--critical)"}">${fmtBRL(f.saldo)}</div>
       <div class="kc-ctx">estimativa até o fim do mês</div>
     </div>
-    <div class="alert-card">
-      ${alerts.length ? alerts.slice(0, 2).map(miniAlertHTML).join("") :
-        `<div class="mini-alert pos"><span class="ma-ic">${icon("shield")}</span><div class="ma-b"><div class="ma-t">Tudo em ordem</div><div class="ma-d">Nenhum alerta no momento</div></div></div>`}
-    </div>
   </div>
 
-  <!-- Linha 3: fluxo / análise / saúde -->
-  <div class="panel-3">
+  <!-- Inteligência: fluxo + análise -->
+  <div class="panel-2">
     <div class="panel">
-      <div class="panel-head"><h3>Fluxo financeiro</h3>
+      <div class="panel-head"><h3><span class="badge-ic b" style="width:30px;height:30px;margin:0 8px 0 0;display:inline-flex;vertical-align:-8px">${icon("activity", 16)}</span>Fluxo financeiro</h3>
         ${dsel("flow", [["6", "Últimos 6 meses"], ["12", "Últimos 12 meses"], ["ano", "Este ano"]], flowRange)}</div>
       <div class="legend">
-        <span class="key"><span class="swatch" style="background:var(--good)"></span>Entradas</span>
-        <span class="key"><span class="swatch" style="background:var(--critical)"></span>Saídas</span>
+        <span class="key"><span class="swatch" style="background:var(--good)"></span>Receitas</span>
+        <span class="key"><span class="swatch" style="background:var(--critical)"></span>Despesas</span>
         <span class="key"><span class="swatch" style="background:var(--s1); border-radius:50%; width:9px; height:9px"></span>Saldo</span>
       </div>
       ${chartFlowDiverging(flowMonths())}
     </div>
     <div class="panel">
-      <div class="panel-head"><h3>Análise de gastos</h3>
+      <div class="panel-head"><h3><span class="badge-ic v" style="width:30px;height:30px;margin:0 8px 0 0;display:inline-flex;vertical-align:-8px">${icon("pie", 16)}</span>Análise de gastos</h3>
         ${dsel("analysis", [["mes", "Este mês"], ["m3", "3 meses"], ["m6", "6 meses"]], analysisPeriod)}</div>
       ${donutBlock(periodMonths(analysisPeriod))}
-      <button class="panel-link" data-goto="orcamento">Ver todas as categorias →</button>
+      <button class="panel-link" data-goto="orcamento">Ver detalhamento por categoria →</button>
+    </div>
+  </div>
+
+  <div class="sec-title"><span class="badge-ic b">${icon("calendar", 18)}</span> Planejamento e alertas</div>
+  <div class="panel-3" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="panel">
+      <div class="flex" style="gap:11px; align-items:center; margin-bottom:8px"><div class="badge-ic b" style="margin:0">${icon("file")}</div><h3 style="margin:0">Contas a vencer</h3></div>
+      <div class="kc-val" style="font-size:26px; font-weight:700">${aVencer.length} conta(s)</div>
+      <div class="muted" style="font-size:13px; margin-bottom:6px">${fmtBRL0(aVencerTot)} nos próximos 15 dias</div>
+      ${aVencer.slice(0, 3).map(b => `<div class="flex spread" style="padding:9px 0; border-top:1px solid var(--border); font-size:13.5px">
+        <span class="flex" style="gap:8px; align-items:center; min-width:0"><span class="ia-ic" style="width:26px;height:26px;flex-shrink:0">${icon(catIcon(b.category))}</span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(b.name)}</span></span>
+        <span class="flex" style="gap:8px; align-items:center; flex-shrink:0"><span class="status-pill ${dDays(b.dueDate) <= 3 ? "warn" : "good"}">${dDays(b.dueDate) === 0 ? "vence hoje" : "vence em " + dDays(b.dueDate) + "d"}</span><b>${fmtBRL(b.amount)}</b></span></div>`).join("") || `<div class="muted" style="font-size:13px; padding:6px 0">Nada a vencer nos próximos 15 dias. 🎉</div>`}
+      <button class="panel-link" data-goto="boletos" style="margin-top:10px">Ver todas as contas →</button>
     </div>
     <div class="panel">
-      <div class="panel-head"><h3>Saúde financeira</h3></div>
+      <div class="flex" style="gap:11px; align-items:center; margin-bottom:8px"><div class="badge-ic r" style="margin:0">${icon("alert")}</div><h3 style="margin:0">Contas em atraso</h3></div>
+      <div class="kc-val" style="font-size:26px; font-weight:700; color:${atraso.length ? "var(--critical)" : "var(--ink-1)"}">${atraso.length} conta(s)</div>
+      <div class="muted" style="font-size:13px; margin-bottom:6px">${atraso.length ? fmtBRL0(atrasoTot) + " em atraso" : "nada em atraso 🎉"}</div>
+      ${atraso.slice(0, 3).map(b => `<div class="flex spread" style="padding:9px 0; border-top:1px solid var(--border); font-size:13.5px">
+        <span class="flex" style="gap:8px; align-items:center; min-width:0"><span class="ia-ic" style="width:26px;height:26px;flex-shrink:0">${icon(catIcon(b.category))}</span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(b.name)}</span></span>
+        <span class="flex" style="gap:8px; align-items:center; flex-shrink:0"><span class="status-pill crit">${-dDays(b.dueDate)}d atrás</span><b>${fmtBRL(b.amount)}</b></span></div>`).join("")}
+      ${atraso.length ? `<button class="panel-link" data-goto="boletos" style="margin-top:10px">Regularizar agora →</button>` : ""}
+    </div>
+    <div class="panel">
+      <div class="flex" style="gap:11px; align-items:center; margin-bottom:4px"><div class="badge-ic" style="margin:0; background:var(--accent-soft); color:var(--accent)">${icon("heart")}</div><h3 style="margin:0">Saúde financeira</h3></div>
       <div class="semi-wrap">
         ${semiGauge(sc.total, sc.band)}
         <span class="semi-pill" style="background:${scoreColor(sc.band)}22; color:${scoreColor(sc.band)}">${sc.band.lbl}</span>
-        <div class="muted" style="margin-top:6px; font-size:13px">${sc.total >= 60 ? "Você está no caminho certo." : sc.total >= 40 ? "Seu resultado precisa de ajustes." : "Seu resultado está abaixo do ideal."}</div>
-        <div class="muted" style="font-size:12px">${(() => { const i = generateInsights()[0]; return i ? esc(i.title) : "Registre transações para gerar insights"; })()}</div>
-        <button class="panel-link" data-goto="saude">Ver detalhes da saúde →</button>
+        <div class="muted" style="margin-top:6px; font-size:13px; text-align:center">${sc.total >= 60 ? "Sua saúde financeira está boa." : sc.total >= 40 ? "Seu resultado precisa de ajustes." : "Seu resultado está abaixo do ideal."}</div>
+        <button class="panel-link" data-goto="saude">Ver diagnóstico completo →</button>
       </div>
     </div>
   </div>
