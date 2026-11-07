@@ -1287,6 +1287,16 @@ function viewCartoes() {
             <div style="font-size:26px; font-weight:700">${fmtBRL(tot)}</div></div>
           <div class="muted" style="font-size:13px">${txs.length} compra(s)</div>
         </div>
+        ${c.limit > 0 ? (() => {
+          const pct = Math.min(100, tot / c.limit * 100), lvl = pct > 90 ? "crit" : pct > 70 ? "warn" : "good";
+          return `<div style="margin-bottom:14px">
+            <div class="flex spread" style="font-size:12.5px; margin-bottom:4px">
+              <span class="muted">Limite ${fmtBRL0(c.limit)} · <b style="color:var(--${lvl === "crit" ? "critical" : lvl === "warn" ? "warning" : "good-text"})">${pct.toFixed(0)}% usado</b></span>
+              <span class="muted">disponível ${fmtBRL0(Math.max(0, c.limit - tot))}</span>
+            </div>
+            <div class="meter ${lvl}"><div style="width:${pct.toFixed(1)}%"></div></div>
+          </div>`;
+        })() : ""}
         ${cats.length ? `<div style="display:flex; flex-direction:column; gap:10px">
           ${cats.map(([cat, v]) => `<div>
             <div class="flex spread" style="font-size:13px; margin-bottom:3px">
@@ -1330,12 +1340,13 @@ function modalCard(c = null) {
       <div class="field"><label>Dia de fechamento (opcional)</label><input id="cClose" type="number" min="1" max="31" value="${t.closeDay ?? ""}"></div>
       <div class="field"><label>Dia de vencimento (opcional)</label><input id="cDue" type="number" min="1" max="31" value="${t.dueDay ?? ""}"></div>
     </div>
+    <div class="field"><label>Limite do cartão (opcional)</label><input id="cLimit" inputmode="decimal" value="${t.limit != null ? String(t.limit).replace(".", ",") : ""}" placeholder="Ex.: 5.000,00"></div>
     <div class="modal-actions"><button class="btn secondary" id="mCancel">Cancelar</button><button class="btn" id="mSave">Salvar</button></div>`);
   $("#mCancel").onclick = closeModal;
   $("#mSave").onclick = async () => {
     const name = $("#cName").value.trim();
     if (!name) return toast("Dê um nome ao cartão.");
-    const data = { name, closeDay: $("#cClose").value ? +$("#cClose").value : null, dueDay: $("#cDue").value ? +$("#cDue").value : null };
+    const data = { name, closeDay: $("#cClose").value ? +$("#cClose").value : null, dueDay: $("#cDue").value ? +$("#cDue").value : null, limit: parseMoney($("#cLimit").value) || null };
     try {
       if (c) await updateDoc(doc(db, "households", hid, "cards", c.id), data);
       else await addDoc(collection(db, "households", hid, "cards"), data);
